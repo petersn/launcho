@@ -75,9 +75,19 @@ impl SecretsSpec {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ProcessSpec {
+  pub name:    String,
+  pub command: String,
+  pub args:    Vec<String>,
+  pub env:     Option<HashMap<String, String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HujingzhiConfig {
   pub server:  ServerSpec,
   pub secrets: SecretsSpec,
+  pub processes: Vec<ProcessSpec>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

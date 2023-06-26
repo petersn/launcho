@@ -21,3 +21,6 @@ server:
   #  key_file: key.pem
   # Print extra debug information to the console:
   debug_mode: true
+
+processes:
+  
