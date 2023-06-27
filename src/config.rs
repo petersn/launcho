@@ -113,14 +113,44 @@ impl HealthCheckSpec {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum UidOrUsername {
+  Uid(u32),
+  Username(String),
+}
+
+impl UidOrUsername {
+  pub fn apply_secrets(&mut self, secrets: &Secrets) -> Result<(), Error> {
+    Ok(match self {
+      UidOrUsername::Uid(_) => {}
+      UidOrUsername::Username(s) => *s = secrets.substitute(s)?,
+    })
+  }
+
+  pub fn to_uid(&self) -> Result<u32, Error> {
+    Ok(match self {
+      UidOrUsername::Uid(uid) => *uid,
+      UidOrUsername::Username(username) => {
+        let user = users::get_user_by_name(username)
+          .with_context(|| format!("Failed to find user {}", username))?;
+        user.uid()
+      }
+    })
+  }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProcessSpec {
-  pub name:    String,
-  pub command: Vec<String>,
+  pub name:     String,
+  pub command:  Vec<String>,
   #[serde(default)]
-  pub env:     BTreeMap<String, String>,
+  pub env:      BTreeMap<String, String>,
   pub receives: Vec<String>,
-  pub health:  Option<HealthCheckSpec>,
+  pub health:   Option<HealthCheckSpec>,
+  pub uid:      Option<UidOrUsername>,
+  pub gid:      Option<UidOrUsername>,
+  pub cwd:      Option<String>,
 }
 
 impl ProcessSpec {
@@ -128,7 +158,7 @@ impl ProcessSpec {
     for command in &mut self.command {
       *command = secrets.substitute(command)?;
     }
-    for (key, value) in &mut self.env {
+    for value in self.env.values_mut() {
       *value = secrets.substitute(value)?;
     }
     for receive in &mut self.receives {
@@ -136,6 +166,12 @@ impl ProcessSpec {
     }
     if let Some(health) = &mut self.health {
       health.apply_secrets(secrets)?;
+    }
+    if let Some(uid) = &mut self.uid {
+      uid.apply_secrets(secrets)?;
+    }
+    if let Some(gid) = &mut self.gid {
+      gid.apply_secrets(secrets)?;
     }
     Ok(())
   }
