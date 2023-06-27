@@ -4,23 +4,14 @@
 secrets:
   # Secrets can be loaded from a file of key-value pairs:
   #file: secrets.yaml
-  # Secrets can be loaded from environment variables:
-  env:
-    - "PWD"
+  ## Secrets can be loaded from environment variables:
+  #env:
+  #  - "PWD"
   # Secrets can be hard-coded:
   values:
     SECRET_NAME: "hard-coded-value"
 
 server:
-  host: "0.0.0.0"
-  port: 12888
-  #cert: ""
-  # Optional TLS support, if you don't have a reverse-proxy to terminate TLS:
-  #tls:
-  #  cert_file: cert.pem
-  #  key_file: key.pem
-  # Print extra debug information to the console:
-  debug_mode: true
-
-processes:
-  
+  admin_host: "0.0.0.0"
+  admin_port: 12888
+  loopback_ports: [10000, 11000]

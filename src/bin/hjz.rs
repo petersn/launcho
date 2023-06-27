@@ -1,5 +1,6 @@
 use anyhow::Error;
 use clap::Parser;
+use hujingzhi::{ipvs, ClientResponse};
 
 #[derive(Debug, Parser)]
 #[clap(author, version, about, long_about = None)]
@@ -24,11 +25,23 @@ enum Action {
     #[clap(short, long, value_parser, default_value = "hjz-config.yaml")]
     config: String,
   },
+  Ipvs,
   Ping,
-  Get {
-    #[clap(short, long)]
-    stream: String,
+  GetTarget,
+  SetTarget {
+    #[clap(short, long, value_parser, default_value = "hjz-target.yaml")]
+    path: String,
   },
+}
+
+fn handle_error_response(response: ClientResponse) -> ClientResponse {
+  match response {
+    ClientResponse::Error { message } => {
+      eprintln!("Error: {}", message);
+      std::process::exit(1);
+    }
+    _ => response,
+  }
 }
 
 async fn main_result() -> Result<(), Error> {
@@ -53,8 +66,38 @@ async fn main_result() -> Result<(), Error> {
       let server_config = serde_yaml::from_str(&config_string)?;
       hujingzhi::server_main(server_config).await?
     }
-    Action::Ping => hujingzhi::send_request(hujingzhi::RestRequest::Ping).await?,
-    Action::Get { stream } => hujingzhi::send_request(hujingzhi::RestRequest::Get { stream }).await?,
+    Action::Ipvs => {
+      let state = ipvs::get_ipvs_state()?;
+      println!("{:#?}", state);
+    }
+    Action::Ping => {
+      let pong = hujingzhi::send_request(hujingzhi::ClientRequest::Ping).await?;
+      println!("{:#?}", pong);
+    }
+    Action::GetTarget => {
+      let response =
+        handle_error_response(hujingzhi::send_request(hujingzhi::ClientRequest::GetTarget).await?);
+      match response {
+        ClientResponse::Target { target } => print!("{}", target),
+        _ => panic!("Unexpected response: {:?}", response),
+      }
+    }
+    Action::SetTarget { path } => {
+      let target_text = std::fs::read_to_string(&path)?;
+      let response = handle_error_response(
+        hujingzhi::send_request(hujingzhi::ClientRequest::SetTarget {
+          target: target_text,
+        })
+        .await?,
+      );
+      match response {
+        ClientResponse::Success { message: None } => println!("Success"),
+        ClientResponse::Success {
+          message: Some(message),
+        } => println!("{}", message),
+        _ => panic!("Unexpected response: {:?}", response),
+      }
+    }
   })
 }
 
