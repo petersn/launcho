@@ -24,8 +24,10 @@ pub struct IpvsService {
   pub servers:       Vec<IpvsServer>,
 }
 
+#[serde_with::serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IpvsState {
+  #[serde_as(as = "Vec<(_, _)>")]
   pub services: HashMap<(String, u16), IpvsService>,
 }
 

@@ -337,6 +337,9 @@ impl GlobalState {
       let port = match allocate_port(free_loopback_ports, allocated_ports) {
         Ok(port) => port,
         Err(e) => {
+          log_event(LogEvent::Error {
+            msg: format!("Failed to allocate ports when launching process: {}", e),
+          });
           // Avoid leaking ports.
           for port in port_allocations.values() {
             release_port(free_loopback_ports, allocated_ports, *port);
@@ -803,9 +806,12 @@ pub async fn server_main(mut config: HujingzhiConfig) -> Result<(), Error> {
     .then(|(), global_state: &'static GlobalState, request: ClientRequest| async move {
       match global_state.handle_rest_request(request).await {
         Ok(response) => warp::reply::json(&response),
-        Err(err) => warp::reply::json(&ClientResponse::Error {
-          message: format!("{}", err),
-        }),
+        Err(err) => {
+          eprintln!("Error: {}", err);
+          warp::reply::json(&ClientResponse::Error {
+            message: format!("{}", err),
+          })
+        }
       }
     });
 
