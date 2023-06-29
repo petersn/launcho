@@ -150,8 +150,11 @@ async fn main_result() -> Result<(), Error> {
         hujingzhi::send_request(hujingzhi::ClientRequest::Restart { name: process }).await?,
       );
       match response {
-        ClientResponse::Success { message } => println!("Success: {:?}", message),
-        ClientResponse::Error { message } => println!("{}", message),
+        ClientResponse::Success { message: None } => println!("Success"),
+        ClientResponse::Success {
+          message: Some(message),
+        } => println!("Success: {}", message),
+        ClientResponse::Error { message } => println!("Error: {}", message),
         _ => panic!("Unexpected response: {:?}", response),
       }
     }
