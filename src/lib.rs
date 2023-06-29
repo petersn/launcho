@@ -458,16 +458,12 @@ impl GlobalState {
     } else {
       "/"
     };
-    let client = reqwest::Client::builder()
-      .timeout(CHECK_TIMEOUT)
-      .build()?;
+    let client = reqwest::Client::builder().timeout(CHECK_TIMEOUT).build()?;
     Ok(
-      match client.get(format!(
-        "http://localhost:{}{}{}",
-        service_port, maybe_slash, health_check_spec.path
-      ))
-      .send()
-      .await
+      match client
+        .get(format!("http://localhost:{}{}{}", service_port, maybe_slash, health_check_spec.path))
+        .send()
+        .await
       {
         Ok(response) => response.status().is_success(),
         Err(e) if e.is_connect() || e.is_timeout() => false,
@@ -635,7 +631,10 @@ impl GlobalState {
       let mut have_newer_running_version = false;
       for i in (0..process_set.running_versions.len()).rev() {
         let (_, entry) = &mut process_set.running_versions[i];
-        if matches!(entry.status, ProcessStatus::Starting | ProcessStatus::Running | ProcessStatus::Unhealthy) {
+        if matches!(
+          entry.status,
+          ProcessStatus::Starting | ProcessStatus::Running | ProcessStatus::Unhealthy
+        ) {
           if have_newer_running_version {
             update_status!(entry, ProcessStatus::Sunsetting);
             // When doing so, send a SIGINT to the process.
@@ -715,7 +714,10 @@ impl GlobalState {
     Ok(())
   }
 
-  fn find_matching_process<'a>(name: &str, processes_by_name: &'a mut HashMap<String, ProcessSet>) -> Result<&'a mut RunningProcessEntry, String> {
+  fn find_matching_process<'a>(
+    name: &str,
+    processes_by_name: &'a mut HashMap<String, ProcessSet>,
+  ) -> Result<&'a mut RunningProcessEntry, String> {
     let mut result = Err(format!("no process matching {:?} found", name));
     for process_set in processes_by_name.values_mut() {
       for (_, entry) in &mut process_set.running_versions {
@@ -808,7 +810,7 @@ impl GlobalState {
         let mut synced = self.synced.lock().await;
         match Self::find_matching_process(&name, &mut synced.processes_by_name) {
           Ok(entry) => ClientResponse::Logs {
-            name: entry.name.clone(),
+            name:   entry.name.clone(),
             stdout: entry.stdout.get(),
             stderr: entry.stderr.get(),
           },
@@ -820,7 +822,9 @@ impl GlobalState {
         match Self::find_matching_process(&name, &mut synced.processes_by_name) {
           Ok(entry) => match entry.status {
             ProcessStatus::Starting | ProcessStatus::Running => {
-              log_event(LogEvent::ForceRestart { name: entry.name.clone() });
+              log_event(LogEvent::ForceRestart {
+                name: entry.name.clone(),
+              });
               entry.status = ProcessStatus::Unhealthy;
               ClientResponse::Success {
                 message: Some(format!("Marked {} for restarting", entry.name)),
