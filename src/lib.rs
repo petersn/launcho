@@ -203,8 +203,7 @@ pub enum ClientResponse {
   },
   Logs {
     name:   String,
-    stdout: String,
-    stderr: String,
+    output: String,
   },
 }
 
@@ -217,31 +216,37 @@ pub enum ProcessStatus {
   Exited { exit_status: i32, approx_time: u64 },
 }
 
-struct SpooledOutput<T: AsyncRead + Unpin + Send + Sync + 'static> {
-  buffer:  Mutex<Vec<u8>>,
-  _marker: std::marker::PhantomData<T>,
+struct SpooledOutput {
+  buffer: Mutex<Vec<u8>>,
 }
 
-impl<T: AsyncRead + Unpin + Send + Sync + 'static> SpooledOutput<T> {
-  fn new(mut reader: T) -> Arc<Self> {
+impl SpooledOutput {
+  fn new(stdout: ChildStdout, stderr: ChildStderr) -> Arc<Self> {
     let this = Arc::new(Self {
-      buffer:  Mutex::new(Vec::new()),
-      _marker: std::marker::PhantomData,
+      buffer: Mutex::new(Vec::new()),
     });
-    let spawn_this = this.clone();
-    tokio::spawn(async move {
+
+    fn launch<T>(this: Arc<SpooledOutput>, mut reader: T)
+    where
+      T: AsyncRead + Unpin + Send + Sync + 'static,
+    {
       use tokio::io::AsyncReadExt;
-      let mut buf = [0; 1024];
-      loop {
-        let n = reader.read(&mut buf).await.unwrap();
-        if n == 0 {
-          break;
+      tokio::spawn(async move {
+        let mut buf = [0; 4096];
+        loop {
+          let n = reader.read(&mut buf).await.unwrap();
+          if n == 0 {
+            break;
+          }
+          let mut guard = this.buffer.lock().unwrap();
+          guard.extend_from_slice(&buf[..n]);
+          std::mem::drop(guard);
         }
-        let mut guard = spawn_this.buffer.lock().unwrap();
-        guard.extend_from_slice(&buf[..n]);
-        std::mem::drop(guard);
-      }
-    });
+      });
+    }
+    launch(this.clone(), stdout);
+    launch(this.clone(), stderr);
+
     this
   }
 
@@ -259,8 +264,7 @@ struct RunningProcessEntry {
   name:              String,
   /// Maps service name to port number.
   port_allocations:  HashMap<String, u16>,
-  stdout:            Arc<SpooledOutput<ChildStdout>>,
-  stderr:            Arc<SpooledOutput<ChildStderr>>,
+  output:            Arc<SpooledOutput>,
 }
 
 impl RunningProcessEntry {
@@ -276,8 +280,7 @@ impl RunningProcessEntry {
       process,
       name,
       port_allocations,
-      stdout: SpooledOutput::new(stdout),
-      stderr: SpooledOutput::new(stderr),
+      output: SpooledOutput::new(stdout, stderr),
     }
   }
 }
@@ -811,8 +814,7 @@ impl GlobalState {
         match Self::find_matching_process(&name, &mut synced.processes_by_name) {
           Ok(entry) => ClientResponse::Logs {
             name:   entry.name.clone(),
-            stdout: entry.stdout.get(),
-            stderr: entry.stderr.get(),
+            output: entry.output.get(),
           },
           Err(message) => ClientResponse::Error { message },
         }

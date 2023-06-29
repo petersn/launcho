@@ -133,14 +133,10 @@ async fn main_result() -> Result<(), Error> {
       match response {
         ClientResponse::Logs {
           name,
-          stdout,
-          stderr,
+          output,
         } => {
           println!("Process: {}", name);
-          println!("stdout:");
-          println!("{}", stdout);
-          println!("stderr:");
-          println!("{}", stderr);
+          println!("{}", output);
         }
         _ => panic!("Unexpected response: {:?}", response),
       }
