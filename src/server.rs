@@ -15,7 +15,7 @@ use warp::Filter;
 use crate::ipvs;
 use crate::{
   config::{AuthConfig, HujingzhiConfig, HujingzhiTarget, ProcessSpec, Secrets},
-  constant_time_eq, get_auth_config, get_target, ClientRequest, ClientResponse, LogEvent,
+  get_auth_config, get_target, ClientRequest, ClientResponse, LogEvent,
   ProcessStatus, DEFAULT_TARGET_PATH, SERVICE_IP_PREFIX,
 };
 
@@ -24,6 +24,11 @@ static HOUSEKEEPING_INTERVAL: std::time::Duration = std::time::Duration::from_se
 static START_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
 static HEALTH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
 static CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+  use subtle::ConstantTimeEq;
+  a.ct_eq(b).into()
+}
 
 fn make_random_word() -> String {
   static ADJECTIVES: &str = include_str!("english-adjectives.txt");

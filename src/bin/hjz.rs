@@ -76,6 +76,7 @@ async fn main_result() -> Result<(), Error> {
       // Check if we're on Linux.
       #[cfg(not(target_os = "linux"))]
       {
+        std::mem::drop(config); // Suppress warning.
         eprintln!("hjz server only works on Linux");
         std::process::exit(1);
       }

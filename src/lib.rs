@@ -13,12 +13,8 @@ use crate::ipvs::IpvsState;
 
 static DEFAULT_AUTH_CONFIG_PATH: &str = ".hjz-auth.yaml";
 static DEFAULT_TARGET_PATH: &str = "hjz-target.yaml";
+#[allow(unused)] // Only used on Linux
 static SERVICE_IP_PREFIX: &str = "127.0.0.";
-
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-  use subtle::ConstantTimeEq;
-  a.ct_eq(b).into()
-}
 
 fn make_cryptographic_token() -> String {
   use rand::RngCore;
