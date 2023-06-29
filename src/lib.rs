@@ -3,13 +3,18 @@ pub mod ipvs;
 
 use std::{
   collections::{HashMap, HashSet, VecDeque},
-  sync::{atomic, Mutex},
+  process::Stdio,
+  sync::{atomic, Arc, Mutex},
 };
 
 use anyhow::{anyhow, bail, Error};
 use ipvs::IpvsState;
 use serde::{Deserialize, Serialize};
-use tokio::sync::Mutex as TokioMutex;
+use tokio::{
+  io::AsyncRead,
+  process::{ChildStderr, ChildStdout},
+  sync::Mutex as TokioMutex,
+};
 use warp::Filter;
 
 use crate::config::{
@@ -20,6 +25,7 @@ static DEFAULT_AUTH_CONFIG_PATH: &str = ".hjz-auth.yaml";
 static DEFAULT_TARGET_PATH: &str = "hjz-target.yaml";
 static SERVICE_IP_PREFIX: &str = "127.0.0.";
 static HOUSEKEEPING_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
+// FIXME: These two intervals can only be evaluated in increments of the housekeeping interval.
 static START_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
 static HEALTH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
 
@@ -122,7 +128,7 @@ pub enum LogEvent {
     service: String,
     port:    u16,
     weight:  i32,
-  }
+  },
 }
 
 const LOG_MAX_SIZE: usize = 1000;
@@ -169,6 +175,7 @@ pub enum ClientRequest {
   GetTarget,
   SetTarget { target: String },
   Status,
+  GetLogs { name: String },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -185,9 +192,14 @@ pub enum ClientResponse {
     message: String,
   },
   Status {
-    events: Vec<LogEvent>,
-    status: String,
+    events:     Vec<LogEvent>,
+    status:     String,
     ipvs_state: Option<IpvsState>,
+  },
+  Logs {
+    name:   String,
+    stdout: String,
+    stderr: String,
   },
 }
 
@@ -200,6 +212,40 @@ pub enum ProcessStatus {
   Exited { exit_status: i32, approx_time: u64 },
 }
 
+struct SpooledOutput<T: AsyncRead + Unpin + Send + Sync + 'static> {
+  buffer:  Mutex<Vec<u8>>,
+  _marker: std::marker::PhantomData<T>,
+}
+
+impl<T: AsyncRead + Unpin + Send + Sync + 'static> SpooledOutput<T> {
+  fn new(mut reader: T) -> Arc<Self> {
+    let this = Arc::new(Self {
+      buffer:  Mutex::new(Vec::new()),
+      _marker: std::marker::PhantomData,
+    });
+    let spawn_this = this.clone();
+    tokio::spawn(async move {
+      use tokio::io::AsyncReadExt;
+      let mut buf = [0; 1024];
+      loop {
+        let n = reader.read(&mut buf).await.unwrap();
+        if n == 0 {
+          break;
+        }
+        let mut guard = spawn_this.buffer.lock().unwrap();
+        guard.extend_from_slice(&buf[..n]);
+        std::mem::drop(guard);
+      }
+    });
+    this
+  }
+
+  fn get(&self) -> String {
+    let guard = self.buffer.lock().unwrap();
+    String::from_utf8_lossy(&guard).to_string()
+  }
+}
+
 struct RunningProcessEntry {
   status:            ProcessStatus,
   approx_start:      std::time::Instant,
@@ -208,12 +254,16 @@ struct RunningProcessEntry {
   name:              String,
   /// Maps service name to port number.
   port_allocations:  HashMap<String, u16>,
+  stdout:            Arc<SpooledOutput<ChildStdout>>,
+  stderr:            Arc<SpooledOutput<ChildStderr>>,
 }
 
 impl RunningProcessEntry {
-  fn new(process: tokio::process::Child, port_allocations: HashMap<String, u16>) -> Self {
+  fn new(mut process: tokio::process::Child, port_allocations: HashMap<String, u16>) -> Self {
     let pid = process.id().unwrap_or(u32::MAX);
     let name = format!("{}-{}-{}", make_random_word(), get_counter(), pid);
+    let stdout = process.stdout.take().unwrap();
+    let stderr = process.stderr.take().unwrap();
     Self {
       status: ProcessStatus::Starting,
       approx_start: std::time::Instant::now(),
@@ -221,6 +271,8 @@ impl RunningProcessEntry {
       process,
       name,
       port_allocations,
+      stdout: SpooledOutput::new(stdout),
+      stderr: SpooledOutput::new(stderr),
     }
   }
 }
@@ -369,6 +421,9 @@ impl GlobalState {
     for (service_name, port) in &port_allocations {
       process.env(&format!("SERVICE_PORT_{}", service_name.to_uppercase()), port.to_string());
     }
+    process.stdin(Stdio::null());
+    process.stdout(Stdio::piped());
+    process.stderr(Stdio::piped());
     let process = process.spawn()?;
     let entry = RunningProcessEntry::new(process, port_allocations.clone());
     log_event(LogEvent::LaunchProcess {
@@ -523,12 +578,11 @@ impl GlobalState {
           let status = $status;
           log_event(LogEvent::StatusChange {
             name:   $entry.name.clone(),
-            status: status,
+            status,
           });
           $entry.status = status;
         }};
       }
-
       // Update connection counts.
       for (_, entry) in &mut process_set.running_versions {
         entry.approx_conn_count = entry
@@ -565,12 +619,13 @@ impl GlobalState {
           if have_newer_running_version {
             update_status!(entry, ProcessStatus::Sunsetting);
             // When doing so, send a SIGINT to the process.
-            println!("\x1b[92m[I]\x1b[0m Sunsetting {}", entry.name);
             match entry.process.id() {
               Some(pid) => unsafe {
                 libc::kill(pid as i32, libc::SIGTERM);
               },
-              None => println!("\x1b[91m[E]\x1b[0m BUG: Failed to get PID for {}", entry.name),
+              None => log_event(LogEvent::Error {
+                msg: format!("Failed to send SIGTERM to {}: no PID available", entry.name),
+              }),
             }
           }
           have_newer_running_version = true;
@@ -578,6 +633,9 @@ impl GlobalState {
       }
       // If a process has exited, then set it to exited.
       for (_, entry) in &mut process_set.running_versions {
+        if matches!(entry.status, ProcessStatus::Exited { .. }) {
+          continue;
+        }
         if let Some(exit_status) = entry.process.try_wait()? {
           update_status!(entry, ProcessStatus::Exited {
             exit_status: exit_status.code().unwrap_or(-1),
@@ -589,12 +647,12 @@ impl GlobalState {
       }
     }
 
-    // Drop entries that have exited.
-    for process_set in processes_by_name.values_mut() {
-      process_set
-        .running_versions
-        .retain(|(_, entry)| !matches!(entry.status, ProcessStatus::Exited { .. }));
-    }
+    // // Drop entries that have exited.
+    // for process_set in processes_by_name.values_mut() {
+    //   process_set
+    //     .running_versions
+    //     .retain(|(_, entry)| !matches!(entry.status, ProcessStatus::Exited { .. }));
+    // }
 
     // Adjust IPVS weights based on health of process sets.
     for process_set in processes_by_name.values() {
@@ -612,8 +670,6 @@ impl GlobalState {
             .ok_or_else(|| anyhow!("BUG: Service {} not found", service_name))?;
           let current_weight = loopback_info.get(port).map(|info| info.weight).unwrap_or(0);
           if current_weight != target_weight {
-            //println!("\x1b[92m[I]\x1b[0m Info for port {}: {:#?}", port, loopback_info.get(port));
-            //println!("\x1b[92m[I]\x1b[0m Setting weight of {} to {}", port, target_weight);
             log_event(LogEvent::WeightChange {
               service: service.name.clone(),
               port:    *port,
@@ -697,9 +753,40 @@ impl GlobalState {
           }
         }
         ClientResponse::Status {
-          events: get_entire_log(),
-          status: formatted_status,
+          events:     get_entire_log(),
+          status:     formatted_status,
           ipvs_state: synced.last_ipvs_state.clone(),
+        }
+      }
+      ClientRequest::GetLogs { name } => {
+        let synced = self.synced.lock().await;
+        // FIXME: This linear scan is a little silly.
+        let mut result = None;
+        for process_set in synced.processes_by_name.values() {
+          for (_, entry) in &process_set.running_versions {
+            if entry.name.starts_with(&name) {
+              if result.is_some() {
+                return Ok(ClientResponse::Error {
+                  message: format!("Multiple processes matching {:?}", name),
+                });
+              }
+              result = Some((
+                entry.name.clone(),
+                entry.stdout.get(),
+                entry.stderr.get(),
+              ));
+            }
+          }
+        }
+        match result {
+          Some((name, stdout, stderr)) => ClientResponse::Logs {
+            name,
+            stdout,
+            stderr,
+          },
+          None => ClientResponse::Error {
+            message: format!("No process matching {:?}", name),
+          },
         }
       }
     })
@@ -862,14 +949,9 @@ pub async fn send_request(request: ClientRequest) -> Result<ClientResponse, Erro
   use reqwest::header;
 
   let auth_config = get_auth_config()?;
-  let host = auth_config.host.unwrap();
-  // FIXME: Parse this more robustly.
-  let mut split = host.splitn(2, ':');
-  split.next().unwrap();
-  let port = split.next().unwrap();
-  // println!("domain: {}, port: {}", domain, port);
+  let host = auth_config.host.as_ref().unwrap();
+  let (_, port) = ipvs::parse_host_and_port(host)?;
   let addrs: Vec<_> = host.to_socket_addrs()?.collect();
-  // println!("addrs: {:?}", addrs);
   let auth_header = format!(
     "Basic {}",
     general_purpose::STANDARD.encode(format!(":{}", auth_config.token).as_bytes())
@@ -886,7 +968,6 @@ pub async fn send_request(request: ClientRequest) -> Result<ClientResponse, Erro
     .build()?;
   let response =
     client.post(format!("https://hujingzhi:{}/api", port)).json(&request).send().await?;
-    println!("response: {:?} -- status: {:?}", response, response.status());
   let response = response.text().await?;
   Ok(serde_json::from_str(&response)?)
 }

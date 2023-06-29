@@ -33,6 +33,10 @@ enum Action {
     path: String,
   },
   Status,
+  Logs {
+    #[clap(short, long)]
+    process: String,
+  },
 }
 
 fn handle_error_response(response: ClientResponse) -> ClientResponse {
@@ -104,12 +108,31 @@ async fn main_result() -> Result<(), Error> {
       let response =
         handle_error_response(hujingzhi::send_request(hujingzhi::ClientRequest::Status).await?);
       match response {
-        ClientResponse::Status { status, events, ipvs_state } => {
+        ClientResponse::Status {
+          status,
+          events,
+          ipvs_state,
+        } => {
           for event in events {
             println!("  {:?}", event);
           }
           println!("{:#?}", ipvs_state);
           println!("{}", status)
+        }
+        _ => panic!("Unexpected response: {:?}", response),
+      }
+    }
+    Action::Logs { process } => {
+      let response = handle_error_response(
+        hujingzhi::send_request(hujingzhi::ClientRequest::GetLogs { name: process }).await?,
+      );
+      match response {
+        ClientResponse::Logs { name, stdout, stderr } => {
+          println!("Process: {}", name);
+          println!("stdout:");
+          println!("{}", stdout);
+          println!("stderr:");
+          println!("{}", stderr);
         }
         _ => panic!("Unexpected response: {:?}", response),
       }

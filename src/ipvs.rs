@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use anyhow::{anyhow, bail, Error};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 use crate::config::ServiceSpec;
 
@@ -143,11 +143,11 @@ pub fn set_loopback_weight(service: &ServiceSpec, port: u16, weight: i32) -> Res
   if weight == 0 {
     let mut cmd = std::process::Command::new("ipvsadm");
     cmd
-        .arg("--delete-server")
-        .arg("--tcp-service")
-        .arg(&service.on)
-        .arg("--real-server")
-        .arg(&format!("localhost:{}", port));
+      .arg("--delete-server")
+      .arg("--tcp-service")
+      .arg(&service.on)
+      .arg("--real-server")
+      .arg(&format!("localhost:{}", port));
     let output = cmd.output()?;
     if !output.status.success() {
       if std::str::from_utf8(&output.stderr)?.contains("No such destination") {
