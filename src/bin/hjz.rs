@@ -37,6 +37,10 @@ enum Action {
     #[clap(short, long)]
     process: String,
   },
+  Restart {
+    #[clap(short, long)]
+    process: String,
+  },
 }
 
 fn handle_error_response(response: ClientResponse) -> ClientResponse {
@@ -127,13 +131,29 @@ async fn main_result() -> Result<(), Error> {
         hujingzhi::send_request(hujingzhi::ClientRequest::GetLogs { name: process }).await?,
       );
       match response {
-        ClientResponse::Logs { name, stdout, stderr } => {
+        ClientResponse::Logs {
+          name,
+          stdout,
+          stderr,
+        } => {
           println!("Process: {}", name);
           println!("stdout:");
           println!("{}", stdout);
           println!("stderr:");
           println!("{}", stderr);
         }
+        _ => panic!("Unexpected response: {:?}", response),
+      }
+    }
+    Action::Restart { process } => {
+      let response = handle_error_response(
+        hujingzhi::send_request(hujingzhi::ClientRequest::Restart { name: process }).await?,
+      );
+      match response {
+        ClientResponse::Success {
+          message
+        } => println!("Success: {:?}", message),
+        ClientResponse::Error { message } => println!("{}", message),
         _ => panic!("Unexpected response: {:?}", response),
       }
     }

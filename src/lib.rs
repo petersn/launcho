@@ -28,6 +28,7 @@ static HOUSEKEEPING_INTERVAL: std::time::Duration = std::time::Duration::from_se
 // FIXME: These two intervals can only be evaluated in increments of the housekeeping interval.
 static START_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
 static HEALTH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+static CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
   use subtle::ConstantTimeEq;
@@ -129,6 +130,9 @@ pub enum LogEvent {
     port:    u16,
     weight:  i32,
   },
+  ForceRestart {
+    name: String,
+  },
 }
 
 const LOG_MAX_SIZE: usize = 1000;
@@ -176,6 +180,7 @@ pub enum ClientRequest {
   SetTarget { target: String },
   Status,
   GetLogs { name: String },
+  Restart { name: String },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -453,15 +458,19 @@ impl GlobalState {
     } else {
       "/"
     };
+    let client = reqwest::Client::builder()
+      .timeout(CHECK_TIMEOUT)
+      .build()?;
     Ok(
-      match reqwest::get(format!(
+      match client.get(format!(
         "http://localhost:{}{}{}",
         service_port, maybe_slash, health_check_spec.path
       ))
+      .send()
       .await
       {
         Ok(response) => response.status().is_success(),
-        Err(e) if e.is_connect() => false,
+        Err(e) if e.is_connect() || e.is_timeout() => false,
         Err(e) => return Err(e.into()),
       },
     )
@@ -525,8 +534,17 @@ impl GlobalState {
       match (target_spec, most_recent_version) {
         // If we have no target spec then we won't launch anything.
         (None, _) => {}
-        // If we have an up-to-date running version then we won't launch anything.
-        (Some(target_spec), Some((running_version, _))) if *target_spec == running_version => {}
+        // If we have an up-to-date version that's either starting or running then we won't launch anything.
+        (
+          Some(target_spec),
+          Some((
+            running_version,
+            RunningProcessEntry {
+              status: ProcessStatus::Starting | ProcessStatus::Running,
+              ..
+            },
+          )),
+        ) if *target_spec == running_version => {}
         // Otherwise, launch a new version.
         (Some(target_spec), _) => {
           let process_entry =
@@ -577,7 +595,7 @@ impl GlobalState {
         ($entry:ident, $status:expr) => {{
           let status = $status;
           log_event(LogEvent::StatusChange {
-            name:   $entry.name.clone(),
+            name: $entry.name.clone(),
             status,
           });
           $entry.status = status;
@@ -596,6 +614,7 @@ impl GlobalState {
         if entry.status == ProcessStatus::Running
           && rate_limit(format!("health:{}", entry.name), HEALTH_INTERVAL)
         {
+          // FIXME: Blocking on this potentially slow health check is bad.
           if !self.health_check(spec, entry).await? {
             update_status!(entry, ProcessStatus::Unhealthy);
           }
@@ -606,6 +625,7 @@ impl GlobalState {
         if entry.status == ProcessStatus::Starting
           && rate_limit(format!("start:{}", entry.name), START_INTERVAL)
         {
+          // FIXME: Blocking on this potentially slow health check is bad.
           if self.health_check(spec, entry).await? {
             update_status!(entry, ProcessStatus::Running);
           }
@@ -615,7 +635,7 @@ impl GlobalState {
       let mut have_newer_running_version = false;
       for i in (0..process_set.running_versions.len()).rev() {
         let (_, entry) = &mut process_set.running_versions[i];
-        if entry.status == ProcessStatus::Running {
+        if matches!(entry.status, ProcessStatus::Starting | ProcessStatus::Running | ProcessStatus::Unhealthy) {
           if have_newer_running_version {
             update_status!(entry, ProcessStatus::Sunsetting);
             // When doing so, send a SIGINT to the process.
@@ -643,6 +663,17 @@ impl GlobalState {
               .duration_since(std::time::UNIX_EPOCH)?
               .as_secs(),
           });
+        }
+      }
+    }
+
+    // Release ports of exited processes.
+    for process_set in processes_by_name.values_mut() {
+      for (_, entry) in &mut process_set.running_versions {
+        if matches!(entry.status, ProcessStatus::Exited { .. }) {
+          for port in std::mem::take(&mut entry.port_allocations).values() {
+            release_port(free_loopback_ports, allocated_ports, *port);
+          }
         }
       }
     }
@@ -682,6 +713,21 @@ impl GlobalState {
     }
 
     Ok(())
+  }
+
+  fn find_matching_process<'a>(name: &str, processes_by_name: &'a mut HashMap<String, ProcessSet>) -> Result<&'a mut RunningProcessEntry, String> {
+    let mut result = Err(format!("no process matching {:?} found", name));
+    for process_set in processes_by_name.values_mut() {
+      for (_, entry) in &mut process_set.running_versions {
+        if entry.name.starts_with(&name) {
+          if result.is_ok() {
+            return Err(format!("multiple processes matching {:?} found", name));
+          }
+          result = Ok(entry);
+        }
+      }
+    }
+    result
   }
 
   fn validate_target(target: &HujingzhiTarget) -> Result<(), Error> {
@@ -759,34 +805,32 @@ impl GlobalState {
         }
       }
       ClientRequest::GetLogs { name } => {
-        let synced = self.synced.lock().await;
-        // FIXME: This linear scan is a little silly.
-        let mut result = None;
-        for process_set in synced.processes_by_name.values() {
-          for (_, entry) in &process_set.running_versions {
-            if entry.name.starts_with(&name) {
-              if result.is_some() {
-                return Ok(ClientResponse::Error {
-                  message: format!("Multiple processes matching {:?}", name),
-                });
-              }
-              result = Some((
-                entry.name.clone(),
-                entry.stdout.get(),
-                entry.stderr.get(),
-              ));
-            }
-          }
+        let mut synced = self.synced.lock().await;
+        match Self::find_matching_process(&name, &mut synced.processes_by_name) {
+          Ok(entry) => ClientResponse::Logs {
+            name: entry.name.clone(),
+            stdout: entry.stdout.get(),
+            stderr: entry.stderr.get(),
+          },
+          Err(message) => ClientResponse::Error { message },
         }
-        match result {
-          Some((name, stdout, stderr)) => ClientResponse::Logs {
-            name,
-            stdout,
-            stderr,
+      }
+      ClientRequest::Restart { name } => {
+        let mut synced = self.synced.lock().await;
+        match Self::find_matching_process(&name, &mut synced.processes_by_name) {
+          Ok(entry) => match entry.status {
+            ProcessStatus::Starting | ProcessStatus::Running => {
+              log_event(LogEvent::ForceRestart { name: entry.name.clone() });
+              entry.status = ProcessStatus::Unhealthy;
+              ClientResponse::Success {
+                message: Some(format!("Marked {} for restarting", entry.name)),
+              }
+            }
+            status => ClientResponse::Error {
+              message: format!("{} has the inapplicable status {:?}", entry.name, status),
+            },
           },
-          None => ClientResponse::Error {
-            message: format!("No process matching {:?}", name),
-          },
+          Err(message) => ClientResponse::Error { message },
         }
       }
     })
