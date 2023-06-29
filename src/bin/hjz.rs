@@ -73,10 +73,19 @@ async fn main_result() -> Result<(), Error> {
       println!("{}", serde_yaml::to_string(&auth_config)?);
     }
     Action::Server { config } => {
-      // Parse the config file.
-      let config_string = std::fs::read_to_string(&config)?;
-      let server_config = serde_yaml::from_str(&config_string)?;
-      hujingzhi::server_main(server_config).await?
+      // Check if we're on Linux.
+      #[cfg(not(target_os = "linux"))]
+      {
+        eprintln!("hjz server only works on Linux");
+        std::process::exit(1);
+      }
+      #[cfg(target_os = "linux")]
+      {
+        // Parse the config file.
+        let config_string = std::fs::read_to_string(&config)?;
+        let server_config = serde_yaml::from_str(&config_string)?;
+        hujingzhi::server::server_main(server_config).await?
+      }
     }
     Action::Ipvs => {
       let state = ipvs::get_ipvs_state()?;
@@ -137,10 +146,7 @@ async fn main_result() -> Result<(), Error> {
         hujingzhi::send_request(hujingzhi::ClientRequest::GetLogs { name: process }).await?,
       );
       match response {
-        ClientResponse::Logs {
-          name,
-          output,
-        } => {
+        ClientResponse::Logs { name, output } => {
           println!("Process: {}", name);
           println!("{}", output);
         }
