@@ -32,6 +32,7 @@ enum Action {
     #[clap(short, long, value_parser, default_value = "hjz-target.yaml")]
     path: String,
   },
+  Status,
 }
 
 fn handle_error_response(response: ClientResponse) -> ClientResponse {
@@ -95,6 +96,21 @@ async fn main_result() -> Result<(), Error> {
         ClientResponse::Success {
           message: Some(message),
         } => println!("{}", message),
+        _ => panic!("Unexpected response: {:?}", response),
+      }
+    }
+    Action::Status => {
+      println!("Status:");
+      let response =
+        handle_error_response(hujingzhi::send_request(hujingzhi::ClientRequest::Status).await?);
+      match response {
+        ClientResponse::Status { status, events, ipvs_state } => {
+          for event in events {
+            println!("  {:?}", event);
+          }
+          println!("{:#?}", ipvs_state);
+          println!("{}", status)
+        }
         _ => panic!("Unexpected response: {:?}", response),
       }
     }

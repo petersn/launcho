@@ -143,6 +143,7 @@ impl UidOrUsername {
 #[serde(deny_unknown_fields)]
 pub struct ProcessSpec {
   pub name:     String,
+  pub pre:      Option<String>,
   pub command:  Vec<String>,
   #[serde(default)]
   pub env:      BTreeMap<String, String>,
@@ -155,6 +156,10 @@ pub struct ProcessSpec {
 
 impl ProcessSpec {
   pub fn apply_secrets(&mut self, secrets: &Secrets) -> Result<(), Error> {
+    self.name = secrets.substitute(&self.name)?;
+    if let Some(pre) = &mut self.pre {
+      *pre = secrets.substitute(pre)?;
+    }
     for command in &mut self.command {
       *command = secrets.substitute(command)?;
     }
@@ -184,6 +189,14 @@ pub struct ServiceSpec {
   pub on:   String,
 }
 
+impl ServiceSpec {
+  pub fn apply_secrets(&mut self, secrets: &Secrets) -> Result<(), Error> {
+    self.name = secrets.substitute(&self.name)?;
+    self.on = secrets.substitute(&self.on)?;
+    Ok(())
+  }
+}
+
 #[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HujingzhiTarget {
@@ -195,6 +208,9 @@ impl HujingzhiTarget {
   pub fn apply_secrets(&mut self, secrets: &Secrets) -> Result<(), Error> {
     for process in &mut self.processes {
       process.apply_secrets(secrets)?;
+    }
+    for service in &mut self.services {
+      service.apply_secrets(secrets)?;
     }
     Ok(())
   }

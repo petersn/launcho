@@ -3,11 +3,11 @@ pub mod ipvs;
 
 use std::{
   collections::{HashMap, HashSet, VecDeque},
-  process::ExitStatus,
-  sync::atomic,
+  sync::{atomic, Mutex},
 };
 
 use anyhow::{anyhow, bail, Error};
+use ipvs::IpvsState;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex as TokioMutex;
 use warp::Filter;
@@ -18,6 +18,10 @@ use crate::config::{
 
 static DEFAULT_AUTH_CONFIG_PATH: &str = ".hjz-auth.yaml";
 static DEFAULT_TARGET_PATH: &str = "hjz-target.yaml";
+static SERVICE_IP_PREFIX: &str = "127.0.0.";
+static HOUSEKEEPING_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
+static START_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+static HEALTH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
   use subtle::ConstantTimeEq;
@@ -51,8 +55,111 @@ fn get_counter() -> usize {
 }
 
 fn test_port(port: u16) -> Result<bool, Error> {
-  // FIXME: Actually bind to the socket with SO_REUSEADDR to test it.
-  Ok(true)
+  // We now use libc to bind the port with SO_REUSEADDR.
+  let socket = unsafe { libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0) };
+  if socket < 0 {
+    bail!("Failed to create socket: {}", std::io::Error::last_os_error());
+  }
+  let mut addr = libc::sockaddr_in {
+    sin_family: libc::AF_INET as u16,
+    sin_port:   port.to_be(),
+    sin_addr:   libc::in_addr {
+      s_addr: libc::INADDR_ANY.to_be(),
+    },
+    sin_zero:   [0; 8],
+  };
+  let addr_ptr = &mut addr as *mut libc::sockaddr_in as *mut libc::sockaddr;
+  let reuse_addr = 1;
+  let setsockopt_result = unsafe {
+    libc::setsockopt(
+      socket,
+      libc::SOL_SOCKET,
+      libc::SO_REUSEADDR,
+      &reuse_addr as *const _ as *const libc::c_void,
+      std::mem::size_of::<i32>() as u32,
+    )
+  };
+  if setsockopt_result != 0 {
+    bail!("Failed to set SO_REUSEADDR on socket: {}", std::io::Error::last_os_error());
+  }
+  let bind_result =
+    unsafe { libc::bind(socket, addr_ptr, std::mem::size_of::<libc::sockaddr_in>() as u32) };
+  if bind_result == 0 {
+    unsafe { libc::close(socket) };
+    Ok(true)
+  } else {
+    let err = std::io::Error::last_os_error();
+    if err.kind() == std::io::ErrorKind::AddrInUse {
+      Ok(false)
+    } else {
+      Err(anyhow!("Failed to bind socket: {}", err))
+    }
+  }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum LogEvent {
+  Warning {
+    msg: String,
+  },
+  Error {
+    msg: String,
+  },
+  CreateIpvsService {
+    spec: ServiceSpec,
+  },
+  LaunchProcess {
+    name:             String,
+    process_name:     String,
+    port_allocations: HashMap<String, u16>,
+  },
+  StatusChange {
+    name:   String,
+    status: ProcessStatus,
+  },
+  WeightChange {
+    service: String,
+    port:    u16,
+    weight:  i32,
+  }
+}
+
+const LOG_MAX_SIZE: usize = 1000;
+static LOG_EVENTS: Mutex<VecDeque<LogEvent>> = Mutex::new(VecDeque::new());
+
+pub fn log_event(event: LogEvent) {
+  eprintln!("\x1b[93m[Event]\x1b[0m {:?}", event);
+  let mut events = LOG_EVENTS.lock().unwrap();
+  events.push_back(event);
+  while events.len() > LOG_MAX_SIZE {
+    events.pop_front();
+  }
+}
+
+pub fn get_entire_log() -> Vec<LogEvent> {
+  LOG_EVENTS.lock().unwrap().iter().cloned().collect()
+}
+
+static RATE_LIMITING: Mutex<Option<HashMap<String, std::time::Instant>>> = Mutex::new(None);
+
+pub fn rate_limit(key: String, duration: std::time::Duration) -> bool {
+  let mut map_guard = RATE_LIMITING.lock().unwrap();
+  let map = match map_guard.as_mut() {
+    Some(map) => map,
+    None => {
+      *map_guard = Some(HashMap::new());
+      map_guard.as_mut().unwrap()
+    }
+  };
+  let now = std::time::Instant::now();
+  let last = map.entry(key).or_insert(now);
+  if now.duration_since(*last) > duration {
+    *last = now;
+    true
+  } else {
+    false
+  }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -61,34 +168,46 @@ pub enum ClientRequest {
   Ping,
   GetTarget,
   SetTarget { target: String },
+  Status,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum ClientResponse {
   Pong,
-  Success { message: Option<String> },
-  Target { target: String },
-  Error { message: String },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ProcessStatus {
-  Starting,
-  Running,
-  Sunsetting,
-  Exited {
-    exit_status: ExitStatus,
-    approx_time: std::time::Instant,
+  Success {
+    message: Option<String>,
+  },
+  Target {
+    target: String,
+  },
+  Error {
+    message: String,
+  },
+  Status {
+    events: Vec<LogEvent>,
+    status: String,
+    ipvs_state: Option<IpvsState>,
   },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProcessStatus {
+  Starting,
+  Running,
+  Unhealthy,
+  Sunsetting,
+  Exited { exit_status: i32, approx_time: u64 },
+}
+
 struct RunningProcessEntry {
-  status:           ProcessStatus,
-  process:          tokio::process::Child,
-  name:             String,
+  status:            ProcessStatus,
+  approx_start:      std::time::Instant,
+  approx_conn_count: i32,
+  process:           tokio::process::Child,
+  name:              String,
   /// Maps service name to port number.
-  port_allocations: HashMap<String, u16>,
+  port_allocations:  HashMap<String, u16>,
 }
 
 impl RunningProcessEntry {
@@ -97,6 +216,8 @@ impl RunningProcessEntry {
     let name = format!("{}-{}-{}", make_random_word(), get_counter(), pid);
     Self {
       status: ProcessStatus::Starting,
+      approx_start: std::time::Instant::now(),
+      approx_conn_count: 0,
       process,
       name,
       port_allocations,
@@ -119,26 +240,40 @@ impl ProcessSet {
 struct SyncedGlobalState {
   target_text:         String,
   target:              HujingzhiTarget,
+  processed_services:  HashSet<String>,
   processes_by_name:   HashMap<String, ProcessSet>,
   free_loopback_ports: VecDeque<u16>,
+  allocated_ports:     HashSet<u16>,
+  last_ipvs_state:     Option<IpvsState>,
 }
 
 fn allocate_port(
   free_loopback_ports: &mut VecDeque<u16>,
-  service_name: &str,
+  allocated_ports: &mut HashSet<u16>,
 ) -> Result<u16, Error> {
   loop {
     let port =
       free_loopback_ports.pop_front().ok_or_else(|| anyhow!("No more free loopback ports"))?;
     if !test_port(port)? {
+      log_event(LogEvent::Warning {
+        msg: format!("Port {} is in use, skipping", port),
+      });
       free_loopback_ports.push_back(port);
       continue;
     }
+    assert!(!allocated_ports.contains(&port));
+    allocated_ports.insert(port);
     return Ok(port);
   }
 }
 
-fn release_port(free_loopback_ports: &mut VecDeque<u16>, port: u16) {
+fn release_port(
+  free_loopback_ports: &mut VecDeque<u16>,
+  allocated_ports: &mut HashSet<u16>,
+  port: u16,
+) {
+  assert!(allocated_ports.contains(&port));
+  allocated_ports.remove(&port);
   free_loopback_ports.push_front(port);
 }
 
@@ -158,22 +293,33 @@ impl GlobalState {
     let mut free_loopback_ports = VecDeque::new();
     for i in config.server.loopback_ports.0..config.server.loopback_ports.1 {
       if i == config.server.admin_port {
-        println!(
-          "\x1b[93m[W]\x1b[0m Loopback port range includes the admin port {}, skipping it",
-          i
-        );
+        log_event(LogEvent::Warning {
+          msg: format!("Loopback port range includes the admin port {}, skipping it", i),
+        });
         continue;
       }
       free_loopback_ports.push_back(i);
     }
+    let target = match Self::validate_target(&target) {
+      Ok(()) => target,
+      Err(e) => {
+        log_event(LogEvent::Warning {
+          msg: format!("Ignoring stored target, as it is invalid: {}", e),
+        });
+        HujingzhiTarget::default()
+      }
+    };
     let this = Self {
       config,
       secrets,
       synced: TokioMutex::new(SyncedGlobalState {
         target_text,
         target,
+        processed_services: HashSet::new(),
         processes_by_name: HashMap::new(),
         free_loopback_ports,
+        allocated_ports: HashSet::new(),
+        last_ipvs_state: None,
       }),
     };
     this
@@ -182,24 +328,23 @@ impl GlobalState {
   fn launch_process(
     &self,
     free_loopback_ports: &mut VecDeque<u16>,
+    allocated_ports: &mut HashSet<u16>,
     process_spec: &ProcessSpec,
   ) -> Result<RunningProcessEntry, Error> {
-    println!("\x1b[92m[I]\x1b[0m Launching process {:?}", process_spec.name);
-
     // Allocate ports for the services.
     let mut port_allocations = HashMap::new();
     for service_name in &process_spec.receives {
-      let port = match allocate_port(free_loopback_ports, &service_name) {
+      let port = match allocate_port(free_loopback_ports, allocated_ports) {
         Ok(port) => port,
         Err(e) => {
           // Avoid leaking ports.
           for port in port_allocations.values() {
-            release_port(free_loopback_ports, *port);
+            release_port(free_loopback_ports, allocated_ports, *port);
           }
           return Err(e);
         }
       };
-      println!("\x1b[92m[I]\x1b[0m Allocated port {} for service {}", port, service_name);
+      //println!("\x1b[92m[I]\x1b[0m Allocated port {} for service {}", port, service_name);
       port_allocations.insert(service_name.clone(), port);
     }
 
@@ -222,7 +367,13 @@ impl GlobalState {
       process.env(&format!("SERVICE_PORT_{}", service_name.to_uppercase()), port.to_string());
     }
     let process = process.spawn()?;
-    Ok(RunningProcessEntry::new(process, port_allocations))
+    let entry = RunningProcessEntry::new(process, port_allocations.clone());
+    log_event(LogEvent::LaunchProcess {
+      name: entry.name.clone(),
+      process_name: process_spec.name.clone(),
+      port_allocations,
+    });
+    Ok(entry)
   }
 
   async fn health_check(
@@ -234,7 +385,7 @@ impl GlobalState {
       // If there's no health check, then the process is always considered healthy.
       return Ok(true);
     };
-    println!("\x1b[92m[I]\x1b[0m Checking health of process {:?}", process_spec.name);
+    //println!("\x1b[92m[I]\x1b[0m Checking health of process {:?}", process_spec.name);
     let service_port = *entry
       .port_allocations
       .get(&health_check_spec.service)
@@ -262,8 +413,11 @@ impl GlobalState {
     let mut synced = self.synced.lock().await;
     let SyncedGlobalState {
       target,
+      processed_services,
       processes_by_name,
       free_loopback_ports,
+      allocated_ports,
+      last_ipvs_state,
       ..
     } = &mut *synced;
 
@@ -275,16 +429,28 @@ impl GlobalState {
     }
 
     // Get the ipvs state.
-    let ipvs_state = ipvs::get_ipvs_state()?;
+    *last_ipvs_state = Some(ipvs::get_ipvs_state()?);
+    let ipvs_state = last_ipvs_state.as_ref().unwrap();
     //println!("\x1b[92m[I]\x1b[0m Got ipvs state: {:#?}", ipvs_state);
 
     // Create IPVS services for every service in the target.
     for service in &target.services {
-      let (host, port) = ipvs::parse_host_and_port(&service.on)?;
-      if !ipvs_state.services.contains_key(&(host.to_string(), port)) {
-        println!("\x1b[92m[I]\x1b[0m Creating IPVS service for {}:{}", host, port);
+      // FIXME: Again, I have to think about migrations more carefully.
+      if !processed_services.contains(&service.name) {
+        //println!("\x1b[92m[I]\x1b[0m Creating IPVS service {} on {}", service.name, service.on);
+        log_event(LogEvent::CreateIpvsService {
+          spec: service.clone(),
+        });
+        ipvs::delete_service(&service).ok();
         ipvs::create_service(&service)?;
+        processed_services.insert(service.name.clone());
       }
+
+      // let (host, port) = ipvs::parse_host_and_port(&service.on)?;
+      // if !ipvs_state.services.contains_key(&(host.to_string(), port)) {
+      //   println!("\x1b[92m[I]\x1b[0m Creating IPVS service for {}:{}", host, port);
+      //   ipvs::create_service(&service)?;
+      // }
     }
 
     // Map process names to specs.
@@ -305,79 +471,161 @@ impl GlobalState {
         (Some(target_spec), Some((running_version, _))) if *target_spec == running_version => {}
         // Otherwise, launch a new version.
         (Some(target_spec), _) => {
-          let process_entry = match self.launch_process(free_loopback_ports, target_spec) {
-            Ok(process_entry) => process_entry,
-            Err(e) => {
-              println!("\x1b[91m[E]\x1b[0m Failed to launch process {}: {}", process_name, e);
-              continue;
-            }
-          };
+          let process_entry =
+            match self.launch_process(free_loopback_ports, allocated_ports, target_spec) {
+              Ok(process_entry) => process_entry,
+              Err(e) => {
+                log_event(LogEvent::Error {
+                  msg: format!("Failed to launch process {}: {}", process_name, e),
+                });
+                continue;
+              }
+            };
           process_set.running_versions.push((ProcessSpec::clone(target_spec), process_entry));
         }
       };
     }
 
-    let mut connection_count_by_loopback_port = HashMap::<u16, i32>::new();
+    #[derive(Debug)]
+    struct LoopbackInfo {
+      connections: i32,
+      weight:      i32,
+    }
+    let mut loopback_info = HashMap::<u16, LoopbackInfo>::new();
     for service in ipvs_state.services.values() {
+      if !service.local_address.starts_with(SERVICE_IP_PREFIX) {
+        continue;
+      }
       for server in &service.servers {
         if server.address == "127.0.0.1" {
-          connection_count_by_loopback_port
-            .entry(server.port)
-            .and_modify(|count| *count += server.active_conn)
-            .or_insert(0);
+          assert!(!loopback_info.contains_key(&server.port));
+          loopback_info.insert(server.port, LoopbackInfo {
+            connections: server.active_conn,
+            weight:      server.weight,
+          });
+          //connection_count_by_loopback_port
+          //  .entry(server.port)
+          //  .and_modify(|count| *count += server.active_conn)
+          //  .or_insert(0);
+          //weight_by_loopback_port.insert(server.port, server.weight);
         }
       }
     }
-    println!("\x1b[92m[I]\x1b[0m Connection counts: {:#?}", connection_count_by_loopback_port);
+    //println!("\x1b[92m[I]\x1b[0m Connection counts: {:#?}", loopback_info);
 
     // Update statuses on processes.
     for process_set in processes_by_name.values_mut() {
-      // Perform health checks.
-      if let Some((spec, entry)) = process_set.running_versions.last_mut() {
-        if entry.status == ProcessStatus::Starting && self.health_check(spec, entry).await? {
-          entry.status = ProcessStatus::Running;
+      macro_rules! update_status {
+        ($entry:ident, $status:expr) => {{
+          let status = $status;
+          log_event(LogEvent::StatusChange {
+            name:   $entry.name.clone(),
+            status: status,
+          });
+          $entry.status = status;
+        }};
+      }
+
+      // Update connection counts.
+      for (_, entry) in &mut process_set.running_versions {
+        entry.approx_conn_count = entry
+          .port_allocations
+          .values()
+          .map(|port| loopback_info.get(port).map(|info| info.connections).unwrap_or(0))
+          .sum();
+      }
+      // Perform health checks on running processes.
+      for (spec, entry) in &mut process_set.running_versions {
+        if entry.status == ProcessStatus::Running
+          && rate_limit(format!("health:{}", entry.name), HEALTH_INTERVAL)
+        {
+          if !self.health_check(spec, entry).await? {
+            update_status!(entry, ProcessStatus::Unhealthy);
+          }
         }
       }
-      // If a process is running, isn't the last version, and has no connections on any services, then set it to sunsetting.
-      for i in 0..process_set.running_versions.len() - 1 {
+      // Perform start-up checks on starting processes.
+      if let Some((spec, entry)) = process_set.running_versions.last_mut() {
+        if entry.status == ProcessStatus::Starting
+          && rate_limit(format!("start:{}", entry.name), START_INTERVAL)
+        {
+          if self.health_check(spec, entry).await? {
+            update_status!(entry, ProcessStatus::Running);
+          }
+        }
+      }
+      // If there's a newer running version, then sunset the older running versions.
+      let mut have_newer_running_version = false;
+      for i in (0..process_set.running_versions.len()).rev() {
         let (_, entry) = &mut process_set.running_versions[i];
-        let total_connection_count: i32 = entry.port_allocations.values().map(|port| {
-          connection_count_by_loopback_port
-            .get(port)
-            .copied()
-            .unwrap_or(0)
-        }).sum();
-        if entry.status == ProcessStatus::Running && total_connection_count == 0 {
-          entry.status = ProcessStatus::Sunsetting;
-          // When doing so, send a SIGINT to the process.
-          println!("\x1b[92m[I]\x1b[0m Sunsetting {}", entry.name);
-          entry.process.id().map(|pid| unsafe { libc::kill(pid as i32, libc::SIGINT) });
+        if entry.status == ProcessStatus::Running {
+          if have_newer_running_version {
+            update_status!(entry, ProcessStatus::Sunsetting);
+            // When doing so, send a SIGINT to the process.
+            println!("\x1b[92m[I]\x1b[0m Sunsetting {}", entry.name);
+            match entry.process.id() {
+              Some(pid) => unsafe {
+                libc::kill(pid as i32, libc::SIGTERM);
+              },
+              None => println!("\x1b[91m[E]\x1b[0m BUG: Failed to get PID for {}", entry.name),
+            }
+          }
+          have_newer_running_version = true;
         }
       }
       // If a process has exited, then set it to exited.
       for (_, entry) in &mut process_set.running_versions {
         if let Some(exit_status) = entry.process.try_wait()? {
-          entry.status = ProcessStatus::Exited {
-            exit_status,
-            approx_time: std::time::Instant::now(),
-          };
+          update_status!(entry, ProcessStatus::Exited {
+            exit_status: exit_status.code().unwrap_or(-1),
+            approx_time: std::time::SystemTime::now()
+              .duration_since(std::time::UNIX_EPOCH)?
+              .as_secs(),
+          });
         }
       }
     }
 
+    // Drop entries that have exited.
+    for process_set in processes_by_name.values_mut() {
+      process_set
+        .running_versions
+        .retain(|(_, entry)| !matches!(entry.status, ProcessStatus::Exited { .. }));
+    }
+
     // Adjust IPVS weights based on health of process sets.
     for process_set in processes_by_name.values() {
-      for i in 0..process_set.running_versions.len() {
-        let is_last = i == process_set.running_versions.len() - 1;
-        let (_, entry) = &process_set.running_versions[i];
-        match (is_last, entry.status, ipvs_state) {}
+      for (_, entry) in &process_set.running_versions {
+        let target_weight = match entry.status {
+          ProcessStatus::Running => 1,
+          _ => 0,
+        };
+        for (service_name, port) in &entry.port_allocations {
+          // FIXME: There are bugs here relating to changing the port a service is on.
+          let service = target
+            .services
+            .iter()
+            .find(|service| service.name == *service_name)
+            .ok_or_else(|| anyhow!("BUG: Service {} not found", service_name))?;
+          let current_weight = loopback_info.get(port).map(|info| info.weight).unwrap_or(0);
+          if current_weight != target_weight {
+            //println!("\x1b[92m[I]\x1b[0m Info for port {}: {:#?}", port, loopback_info.get(port));
+            //println!("\x1b[92m[I]\x1b[0m Setting weight of {} to {}", port, target_weight);
+            log_event(LogEvent::WeightChange {
+              service: service.name.clone(),
+              port:    *port,
+              weight:  target_weight,
+            });
+            ipvs::set_loopback_weight(service, *port, target_weight)?;
+          }
+        }
       }
     }
 
     Ok(())
   }
 
-  fn validate_target(&self, target: &HujingzhiTarget) -> Result<(), Error> {
+  fn validate_target(target: &HujingzhiTarget) -> Result<(), Error> {
     // Make sure all process and service names are unique.
     macro_rules! check_unique {
       ($field_name:literal, $name:expr) => {{
@@ -391,9 +639,17 @@ impl GlobalState {
     }
     check_unique!("processes", target.processes);
     check_unique!("services", target.services);
-    // Make sure service ports are valid.
+    // Make sure service ports and IPs are valid.
     for service in &target.services {
-      ipvs::parse_host_and_port(&service.on)?;
+      let (host, _) = ipvs::parse_host_and_port(&service.on)?;
+      if !host.starts_with(SERVICE_IP_PREFIX) {
+        bail!(
+          "Service {} has invalid IP {:?} -- must start with {:?}",
+          service.name,
+          host,
+          SERVICE_IP_PREFIX
+        );
+      }
     }
     Ok(())
   }
@@ -412,7 +668,7 @@ impl GlobalState {
       } => {
         let mut target: HujingzhiTarget = serde_yaml::from_str(&target_text)?;
         target.apply_secrets(&self.secrets)?;
-        self.validate_target(&target)?;
+        Self::validate_target(&target)?;
         std::fs::write(DEFAULT_TARGET_PATH, &target_text)?;
         let mut synced = self.synced.lock().await;
         let changed = synced.target != target;
@@ -428,6 +684,21 @@ impl GlobalState {
           ),
         }
       }
+      ClientRequest::Status => {
+        let synced = self.synced.lock().await;
+        let mut formatted_status = String::new();
+        for (process_name, process_set) in &synced.processes_by_name {
+          formatted_status.push_str(&format!("{}:\n", process_name));
+          for (_, entry) in &process_set.running_versions {
+            formatted_status.push_str(&format!("  {}: ({:?})\n", entry.name, entry.status));
+          }
+        }
+        ClientResponse::Status {
+          events: get_entire_log(),
+          status: formatted_status,
+          ipvs_state: synced.last_ipvs_state.clone(),
+        }
+      }
     })
   }
 }
@@ -437,7 +708,9 @@ pub fn get_auth_config() -> Result<AuthConfig, Error> {
     let auth_config: AuthConfig = serde_yaml::from_str(&auth_config_string)?;
     return Ok(auth_config);
   }
-  println!("\x1b[93m[W]\x1b[0m No auth config found, generating one...");
+  log_event(LogEvent::Warning {
+    msg: "No auth config found, generating one...".to_string(),
+  });
   use rcgen::generate_simple_self_signed;
   let subject_alt_names = vec!["hujingzhi".to_string()];
   let cert = generate_simple_self_signed(subject_alt_names)?;
@@ -472,14 +745,14 @@ pub async fn server_main(mut config: HujingzhiConfig) -> Result<(), Error> {
   let global_state: &'static _ =
     Box::leak(Box::new(GlobalState::new(config.clone(), target_text, target, secrets)));
 
-  // Run housekeeping every second.
   tokio::spawn(async move {
     loop {
-      match global_state.housekeeping().await {
-        Ok(()) => {}
-        Err(err) => eprintln!("Housekeeping error: {}", err),
+      if let Err(e) = global_state.housekeeping().await {
+        log_event(LogEvent::Error {
+          msg: format!("Housekeeping error: {}", e),
+        });
       }
-      tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+      tokio::time::sleep(HOUSEKEEPING_INTERVAL).await;
     }
   });
 
@@ -542,6 +815,7 @@ pub async fn server_main(mut config: HujingzhiConfig) -> Result<(), Error> {
       if let Some(MessageAndStatus(msg, status)) = err.find() {
         Ok(warp::http::Response::builder().status(status).body(*msg).unwrap())
       } else {
+        eprintln!("unhandled rejection: {:?}", err);
         Err(err)
       }
     })
@@ -564,7 +838,7 @@ pub async fn server_main(mut config: HujingzhiConfig) -> Result<(), Error> {
   use std::str::FromStr;
   let host = std::net::IpAddr::from_str(&config.server.admin_host)?;
 
-  println!("\x1b[92m[I]\x1b[0m Starting TLS server on port {}", config.server.admin_port);
+  //println!("\x1b[92m[I]\x1b[0m Starting TLS server on port {}", config.server.admin_port);
   Ok(
     warp::serve(all_endpoints)
       .tls()
@@ -606,6 +880,7 @@ pub async fn send_request(request: ClientRequest) -> Result<ClientResponse, Erro
     .build()?;
   let response =
     client.post(format!("https://hujingzhi:{}/api", port)).json(&request).send().await?;
+    println!("response: {:?} -- status: {:?}", response, response.status());
   let response = response.text().await?;
   Ok(serde_json::from_str(&response)?)
 }

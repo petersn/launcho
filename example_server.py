@@ -5,9 +5,11 @@ from flask import Flask
 
 app = Flask(__name__)
 
+version = sys.argv[1]
+
 @app.route("/api")
 def api():
-    return "Hello, World!"
+    return "My version: %s\n" % version
 
 @app.route("/health")
 def health():

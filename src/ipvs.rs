@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 
 use anyhow::{anyhow, bail, Error};
+use serde::{Serialize, Deserialize};
 
 use crate::config::ServiceSpec;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IpvsServer {
   pub address:       String,
   pub port:          u16,
@@ -14,7 +15,7 @@ pub struct IpvsServer {
   pub inactive_conn: i32,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IpvsService {
   pub proto:         String,
   pub local_address: String,
@@ -23,9 +24,17 @@ pub struct IpvsService {
   pub servers:       Vec<IpvsServer>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IpvsState {
   pub services: HashMap<(String, u16), IpvsService>,
+}
+
+fn get_output(cmd: &mut std::process::Command) -> Result<String, Error> {
+  let output = cmd.output()?;
+  if !output.status.success() {
+    bail!("Failed to run {:?}: {:?}", cmd, output);
+  }
+  Ok(String::from_utf8(output.stdout)?)
 }
 
 pub fn parse_host_and_port(host_and_port: &str) -> Result<(&str, u16), Error> {
@@ -43,15 +52,9 @@ pub fn get_ipvs_state() -> Result<IpvsState, Error> {
     anyhow!("short output from ipvsadm")
   }
 
-  let output = std::process::Command::new("ipvsadm")
-    .arg("--list")
-    .arg("--numeric")
-    .arg("--exact")
-    .output()?;
-  if !output.status.success() {
-    bail!("Failed to run ipvsadm: {:?}", output);
-  }
-  let output = String::from_utf8(output.stdout)?;
+  let output = get_output(
+    std::process::Command::new("ipvsadm").arg("--list").arg("--numeric").arg("--exact"),
+  )?;
   let mut services = HashMap::new();
   let mut lines = output.lines();
   // Try to parse the first three lines.
@@ -110,17 +113,65 @@ pub fn get_ipvs_state() -> Result<IpvsState, Error> {
   Ok(IpvsState { services })
 }
 
+pub fn delete_service(service: &ServiceSpec) -> Result<(), Error> {
+  get_output(
+    std::process::Command::new("ipvsadm")
+      .arg("--delete-service")
+      .arg("--tcp-service")
+      .arg(&service.on),
+  )?;
+  Ok(())
+}
+
 pub fn create_service(service: &ServiceSpec) -> Result<(), Error> {
-  let output = std::process::Command::new("ipvsadm")
-    .arg("--add-service")
-    .arg("--tcp-service")
-    .arg(&service.on)
-    .arg("--persistent")
-    .arg("--scheduler")
-    .arg("wrr")
-    .output()?;
-  if !output.status.success() {
-    bail!("Failed to run ipvsadm: {:?}", output);
+  get_output(
+    std::process::Command::new("ipvsadm")
+      .arg("--add-service")
+      .arg("--tcp-service")
+      .arg(&service.on)
+      //.arg("--persistent")
+      .arg("--scheduler")
+      .arg("wrr"),
+  )?;
+  Ok(())
+}
+
+pub fn set_loopback_weight(service: &ServiceSpec, port: u16, weight: i32) -> Result<(), Error> {
+  // If the new weight is zero, simply delete it.
+  if weight == 0 {
+    let mut cmd = std::process::Command::new("ipvsadm");
+    cmd
+        .arg("--delete-server")
+        .arg("--tcp-service")
+        .arg(&service.on)
+        .arg("--real-server")
+        .arg(&format!("localhost:{}", port));
+    let output = cmd.output()?;
+    if !output.status.success() {
+      if std::str::from_utf8(&output.stderr)?.contains("No such destination") {
+        return Ok(());
+      }
+      bail!("Failed to run {:?}: {:?}", cmd, output);
+    }
+    return Ok(());
+  }
+
+  for (mode, tolerate_failure) in [("--add-server", true), ("--edit-server", false)] {
+    match get_output(
+      std::process::Command::new("ipvsadm")
+        .arg(mode)
+        .arg("--tcp-service")
+        .arg(&service.on)
+        .arg("--real-server")
+        .arg(&format!("localhost:{}", port))
+        .arg("--weight")
+        .arg(&format!("{}", weight))
+        .arg("--masquerading"),
+    ) {
+      Ok(_) => break,
+      Err(_) if tolerate_failure => continue,
+      Err(e) => return Err(e),
+    }
   }
   Ok(())
 }
