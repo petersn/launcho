@@ -874,7 +874,7 @@ pub fn get_target() -> Result<(String, HujingzhiTarget), Error> {
     Ok(target_text) => target_text,
     // Check just for file-not-found errors.
     Err(err) if err.kind() == std::io::ErrorKind::NotFound =>
-      "# No orchestration target set\nprocesses: []\n".to_string(),
+      "# No orchestration target set\nprocesses: []\nservices: []\n".to_string(),
     Err(err) => return Err(err.into()),
   };
   let target = serde_yaml::from_str(&target_text)?;
