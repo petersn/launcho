@@ -338,7 +338,6 @@ fn release_port(
 }
 
 struct GlobalState {
-  config:  HujingzhiConfig,
   secrets: Secrets,
   synced:  TokioMutex<SyncedGlobalState>,
 }
@@ -370,7 +369,6 @@ impl GlobalState {
       }
     };
     let this = Self {
-      config,
       secrets,
       synced: TokioMutex::new(SyncedGlobalState {
         target_text,
@@ -800,7 +798,13 @@ impl GlobalState {
         for (process_name, process_set) in &synced.processes_by_name {
           formatted_status.push_str(&format!("{}:\n", process_name));
           for (_, entry) in &process_set.running_versions {
-            formatted_status.push_str(&format!("  {}: ({:?})\n", entry.name, entry.status));
+            let duration = entry.approx_start.elapsed();
+            formatted_status.push_str(&format!("  {}: {:?} (run-time: {:?})\n", entry.name, entry.status, duration));
+            formatted_status.push_str("    ports:");
+            for (service_name, port) in &entry.port_allocations {
+              formatted_status.push_str(&format!(" {}:{}", service_name, port));
+            }
+            formatted_status.push_str("\n");
           }
         }
         ClientResponse::Status {
