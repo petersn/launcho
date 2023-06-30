@@ -860,8 +860,7 @@ pub async fn server_main(mut config: HujingzhiConfig) -> Result<(), Error> {
 
   use std::str::FromStr;
   let host = std::net::IpAddr::from_str(&config.server.admin_host)?;
-
-  //println!("\x1b[92m[I]\x1b[0m Starting TLS server on port {}", config.server.admin_port);
+  println!("Starting server at {}:{}", host, config.server.admin_port);
   Ok(
     warp::serve(all_endpoints)
       .tls()
