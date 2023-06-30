@@ -1,17 +1,22 @@
-# Here is a default config file, you can copy to streamo-config.yaml:
-
-# Use ${SECRET_NAME} to access secrets in this config file.
 secrets:
+  # Secrets can be loaded from environment variables, for example like this:
+  env:
+    - "HOME"
+
   # Secrets can be loaded from a file of key-value pairs:
   #file: secrets.yaml
-  ## Secrets can be loaded from environment variables:
-  #env:
-  #  - "PWD"
-  # Secrets can be hard-coded:
-  values:
-    SECRET_NAME: "hard-coded-value"
 
+  # Secrets can be hard-coded, for example like this:
+  values:
+    EXAMPLE_SECRET: "hard-coded-value"
+
+# Use ${SECRET_NAME} to access secrets in this config file, or in the target file.
 server:
+  # Where to listen for control instructions.
   admin_host: "0.0.0.0"
   admin_port: 12888
-  loopback_ports: [10000, 11000]
+  # Ports to use for ipvs loopback connections to services.
+  # hjz will check to see if a port is in use before mapping it
+  # with ipvs, so it's not the end of the world if this range
+  # includes some other running services.
+  loopback_ports: [30100, 35000]

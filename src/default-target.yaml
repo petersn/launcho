@@ -1,0 +1,29 @@
+# No orchestration target set, this is an example file.
+# Use `hjz get-target` and `hjz set-target` to edit this.
+
+# Create processes like this:
+processes:
+  # -
+  #   name: "example_proc"
+  #   command: ["python", "server.py"]
+  #   env:
+  #     # Use ${SECRET_NAME} to access secrets defined in the server config.
+  #     DATABASE_URL: "${DATABASE_URL}"
+  #   # List all services this process should receive traffic from.
+  #   # Each service for each process gets allocated a port, which is given
+  #   # via a corresponding environment variable, in this case SERVICE_PORT_WEB.
+  #   receives:
+  #     - "web"
+  #   # Define an endpoint to hit to check for health.
+  #   health:
+  #     service: "web"
+  #     path: "/health"
+  #   #uid: "whoever"
+  #   #gid: "whoever"
+  #   #cwd: "/var/wherever"
+
+# Create services like this:
+services:
+  # -
+  #   name: "web"
+  #   on: "127.0.0.1:5000"

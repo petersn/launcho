@@ -1,6 +1,6 @@
-use anyhow::Error;
+use anyhow::{Error, bail};
 use clap::Parser;
-use hujingzhi::{ClientResponse, GetAuthConfigMode, get_config_path};
+use hujingzhi::{ClientResponse, GetAuthConfigMode, get_config_path, guarantee_hjz_directory};
 
 #[derive(Debug, Parser)]
 #[clap(author, version, about, long_about = None)]
@@ -66,22 +66,34 @@ async fn main_result() -> Result<(), Error> {
       auth_config.private = None;
       println!("{}", serde_yaml::to_string(&auth_config)?);
     }
-    Action::Server { config } => {
+    Action::Server { config: maybe_config_path } => {
       // Check if we're on Linux.
       #[cfg(not(target_os = "linux"))]
       {
-        std::mem::drop(config); // Suppress warning.
+        std::mem::drop(maybe_config_path); // Suppress warning.
         eprintln!("hjz server only works on Linux");
         std::process::exit(1);
       }
       #[cfg(target_os = "linux")]
       {
+        let using_default_config_path = maybe_config_path.is_none();
         // Parse the config file.
-        let config = match config {
-          Some(config) => config,
+        let config_path = match maybe_config_path {
+          Some(config_path) => config_path,
           None => get_config_path()?,
         };
-        let config_string = std::fs::read_to_string(config)?;
+        let config_string_result = std::fs::read_to_string(&config_path);
+        let config_string = match (using_default_config_path, config_string_result) {
+          (_, Ok(config_string)) => config_string,
+          (true, Err(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!("\x1b[91mNote:\x1b[0m Config file not found at {} -- writing default config", config_path);
+            guarantee_hjz_directory()?;
+            let default_config = include_str!("../default-config.yaml");
+            std::fs::write(&config_path, &default_config)?;
+            default_config.to_string()
+          }
+          (_, Err(e)) => bail!("Failed to read config file at {}: {}", config_path, e),
+        };
         let server_config = serde_yaml::from_str(&config_string)?;
         hujingzhi::server::server_main(server_config).await?
       }

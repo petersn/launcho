@@ -100,13 +100,25 @@ pub enum GetAuthConfigMode {
   Client,
 }
 
+pub fn get_hjz_directory() -> Result<String, Error> {
+  Ok(format!("{}/.hjz", std::env::var("HOME")?))
+}
+
+pub fn guarantee_hjz_directory() -> Result<(), Error> {
+  match std::fs::create_dir(get_hjz_directory()?) {
+    Ok(_) => Ok(()),
+    Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+    Err(err) => Err(err.into()),
+  }
+}
+
 pub fn get_auth_config(mode: GetAuthConfigMode) -> Result<AuthConfig, Error> {
   let config_path_suffix = match mode {
     GetAuthConfigMode::ServerCreateIfNotExists
     | GetAuthConfigMode::ServerFailIfNotExists => "hjz-server-auth.yaml",
     GetAuthConfigMode::Client => "hjz-client-auth.yaml",
   };
-  let hjz_dir = format!("{}/.hjz", std::env::var("HOME")?);
+  let hjz_dir = get_hjz_directory()?;
   let config_path = format!("{}/{}", hjz_dir, config_path_suffix);
   if let Ok(auth_config_string) = std::fs::read_to_string(&config_path) {
     let auth_config: AuthConfig = serde_yaml::from_str(&auth_config_string)?;
@@ -132,21 +144,17 @@ pub fn get_auth_config(mode: GetAuthConfigMode) -> Result<AuthConfig, Error> {
     token:   make_cryptographic_token(),
   };
   let auth_config_yaml = serde_yaml::to_string(&auth_config)?;
-  match std::fs::create_dir(&hjz_dir) {
-    Ok(_) => {}
-    Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
-    Err(err) => return Err(err.into()),
-  }
+  guarantee_hjz_directory()?;
   std::fs::write(config_path, &auth_config_yaml)?;
   Ok(auth_config)
 }
 
 pub fn get_config_path() -> Result<String, Error> {
-  Ok(format!("{}/.hjz/hjz-config.yaml", std::env::var("HOME")?))
+  Ok(format!("{}/hjz-config.yaml", get_hjz_directory()?))
 }
 
 pub fn get_target_path() -> Result<String, Error> {
-  Ok(format!("{}/.hjz/hjz-target.yaml", std::env::var("HOME")?))
+  Ok(format!("{}/hjz-target.yaml", get_hjz_directory()?))
 }
 
 pub fn get_target() -> Result<(String, HujingzhiTarget), Error> {
@@ -154,7 +162,7 @@ pub fn get_target() -> Result<(String, HujingzhiTarget), Error> {
     Ok(target_text) => target_text,
     // Check just for file-not-found errors.
     Err(err) if err.kind() == std::io::ErrorKind::NotFound =>
-      "# No orchestration target set\nprocesses: []\nservices: []\n".to_string(),
+      include_str!("default-target.yaml").to_string(),
     Err(err) => return Err(err.into()),
   };
   let target = serde_yaml::from_str(&target_text)?;
