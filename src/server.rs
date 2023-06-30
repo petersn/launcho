@@ -8,12 +8,12 @@ use anyhow::{anyhow, bail, Error};
 use tokio::{
   io::AsyncRead,
   process::{ChildStderr, ChildStdout},
-  sync::Mutex as TokioMutex,
+  sync::{Mutex as TokioMutex, MutexGuard as TokioMutexGuard},
 };
 use warp::Filter;
 
 use crate::{
-  config::{AuthConfig, HujingzhiConfig, HujingzhiTarget, ProcessSpec, Secrets},
+  config::{AuthConfig, HujingzhiConfig, HujingzhiTarget, ProcessSpec, Secrets, ServiceSpec},
   get_auth_config, get_target, ClientRequest, ClientResponse, LogEvent, ProcessStatus, get_target_path,
 };
 use crate::{ipvs, GetAuthConfigMode};
@@ -83,11 +83,11 @@ fn test_port(port: u16) -> Result<bool, Error> {
     unsafe { libc::close(socket) };
     Ok(true)
   } else {
-    let err = std::io::Error::last_os_error();
-    if err.kind() == std::io::ErrorKind::AddrInUse {
+    let e = std::io::Error::last_os_error();
+    if e.kind() == std::io::ErrorKind::AddrInUse {
       Ok(false)
     } else {
-      Err(anyhow!("Failed to bind socket: {}", err))
+      Err(anyhow!("Failed to bind socket: {}", e))
     }
   }
 }
@@ -210,10 +210,17 @@ impl ProcessSet {
   }
 }
 
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct AppliedIpvsService {
+  name: String,
+  host: String,
+  port: u16,
+}
+
 struct SyncedGlobalState {
   target_text:         String,
   target:              HujingzhiTarget,
-  processed_services:  HashSet<String>,
+  clean_services:      HashSet<AppliedIpvsService>,
   processes_by_name:   HashMap<String, ProcessSet>,
   free_loopback_ports: VecDeque<u16>,
   allocated_ports:     HashSet<u16>,
@@ -286,7 +293,7 @@ impl GlobalState {
       synced: TokioMutex::new(SyncedGlobalState {
         target_text,
         target,
-        processed_services: HashSet::new(),
+        clean_services: HashSet::new(),
         processes_by_name: HashMap::new(),
         free_loopback_ports,
         allocated_ports: HashSet::new(),
@@ -390,7 +397,7 @@ impl GlobalState {
     let mut synced = self.synced.lock().await;
     let SyncedGlobalState {
       target,
-      processed_services,
+      clean_services,
       processes_by_name,
       free_loopback_ports,
       allocated_ports,
@@ -405,29 +412,18 @@ impl GlobalState {
       }
     }
 
-    // Get the ipvs state.
-    *last_ipvs_state = Some(ipvs::get_ipvs_state()?);
-    let ipvs_state = last_ipvs_state.as_ref().unwrap();
-    //println!("\x1b[92m[I]\x1b[0m Got ipvs state: {:#?}", ipvs_state);
-
     // Create IPVS services for every service in the target.
     for service in &target.services {
-      // FIXME: Again, I have to think about migrations more carefully.
-      if !processed_services.contains(&service.name) {
-        //println!("\x1b[92m[I]\x1b[0m Creating IPVS service {} on {}", service.name, service.on);
+      let (host, port) = ipvs::parse_host_and_port(&service.on)?;
+      let key = AppliedIpvsService { name: service.name.clone(), host: host.to_string(), port };
+      if !clean_services.contains(&key) {
         log_event(LogEvent::CreateIpvsService {
           spec: service.clone(),
         });
         ipvs::delete_service(&service).ok();
         ipvs::create_service(&service)?;
-        processed_services.insert(service.name.clone());
+        clean_services.insert(key);
       }
-
-      // let (host, port) = ipvs::parse_host_and_port(&service.on)?;
-      // if !ipvs_state.services.contains_key(&(host.to_string(), port)) {
-      //   println!("\x1b[92m[I]\x1b[0m Creating IPVS service for {}:{}", host, port);
-      //   ipvs::create_service(&service)?;
-      // }
     }
 
     // Map process names to specs.
@@ -471,6 +467,10 @@ impl GlobalState {
         }
       };
     }
+
+    // Get the ipvs state.
+    *last_ipvs_state = Some(ipvs::get_ipvs_state()?);
+    let ipvs_state = last_ipvs_state.as_ref().unwrap();
 
     #[derive(Debug)]
     struct LoopbackInfo {
@@ -654,9 +654,13 @@ impl GlobalState {
     }
     check_unique!("processes", target.processes);
     check_unique!("services", target.services);
-    // Make sure service ports and IPs are valid.
+    // Make sure service ports and IPs are valid, and each service is on a unique IP+port pair.
+    let mut services_on = HashSet::new();
     for service in &target.services {
-      let (host, _) = ipvs::parse_host_and_port(&service.on)?;
+      let (host, port) = ipvs::parse_host_and_port(&service.on)?;
+      if !services_on.insert((host, port)) {
+        bail!("Duplicated service address+port: {}", service.on);
+      }
       if !host.starts_with(SERVICE_IP_PREFIX) {
         bail!(
           "Service {} has invalid IP {:?} -- must start with {:?}",
@@ -666,6 +670,44 @@ impl GlobalState {
         );
       }
     }
+    Ok(())
+  }
+
+  fn change_target(&self, synced: &mut TokioMutexGuard<'_, SyncedGlobalState>, new_target: HujingzhiTarget) -> Result<(), Error> {
+    // We delete every service that no longer exists.
+    // The above code will take care of creating new ones.
+    let mut new_services: HashSet<AppliedIpvsService> = HashSet::new();
+    for service in &new_target.services {
+      let (host, port) = ipvs::parse_host_and_port(&service.on)?;
+      new_services.insert(AppliedIpvsService {
+        name: service.name.clone(),
+        host: host.to_owned(),
+        port,
+      });
+    }
+    synced.clean_services.retain(|applied_service| {
+      if new_services.contains(&applied_service) {
+        true
+      } else {
+        // NB: This is a little weird to reconstitute.
+        // I should probably just parse my inputs better, and get rid of this distinction.
+        let spec = ServiceSpec {
+          name: applied_service.name.clone(),
+          on:   format!("{}:{}", applied_service.host, applied_service.port),
+        };
+        log_event(LogEvent::DeleteIpvsService {
+          spec: spec.clone(),
+        });
+        if let Err(e) = ipvs::delete_service(&spec) {
+          log_event(LogEvent::Warning {
+            msg: format!("Failed to delete service: {}", e),
+          });
+        }
+        false
+      }
+    });
+
+    synced.target = new_target;
     Ok(())
   }
 
@@ -688,7 +730,7 @@ impl GlobalState {
         let mut synced = self.synced.lock().await;
         let changed = synced.target != target;
         synced.target_text = target_text;
-        synced.target = target;
+        self.change_target(&mut synced, target);
         ClientResponse::Success {
           message: Some(
             match changed {
@@ -806,8 +848,8 @@ pub async fn server_main(mut config: HujingzhiConfig) -> Result<(), Error> {
       match auth_header.unwrap_or_default().strip_prefix("Basic ") {
         Some(basic) => match check_basic_auth(basic) {
           Ok(()) => Ok(()),
-          Err(err) =>
-            Err(warp::reject::custom(MessageAndStatus(err, warp::http::StatusCode::UNAUTHORIZED))),
+          Err(e) =>
+            Err(warp::reject::custom(MessageAndStatus(e, warp::http::StatusCode::UNAUTHORIZED))),
         },
         None => Err(warp::reject::custom(MessageAndStatus(
           r#"Authorization header is required, like:
@@ -823,10 +865,10 @@ pub async fn server_main(mut config: HujingzhiConfig) -> Result<(), Error> {
     .then(|(), global_state: &'static GlobalState, request: ClientRequest| async move {
       match global_state.handle_request(request).await {
         Ok(response) => warp::reply::json(&response),
-        Err(err) => {
-          eprintln!("Error: {}", err);
+        Err(e) => {
+          eprintln!("Error: {}", e);
           warp::reply::json(&ClientResponse::Error {
-            message: format!("{}", err),
+            message: format!("{}", e),
           })
         }
       }
@@ -834,12 +876,12 @@ pub async fn server_main(mut config: HujingzhiConfig) -> Result<(), Error> {
 
   let all_endpoints = api_endpoint
     // Map rejections to a response.
-    .recover(|err: warp::Rejection| async move {
-      if let Some(MessageAndStatus(msg, status)) = err.find() {
+    .recover(|e: warp::Rejection| async move {
+      if let Some(MessageAndStatus(msg, status)) = e.find() {
         Ok(warp::http::Response::builder().status(status).body(*msg).unwrap())
       } else {
-        eprintln!("unhandled rejection: {:?}", err);
-        Err(err)
+        eprintln!("unhandled rejection: {:?}", e);
+        Err(e)
       }
     })
     .with(

@@ -39,6 +39,9 @@ pub enum LogEvent {
   CreateIpvsService {
     spec: ServiceSpec,
   },
+  DeleteIpvsService {
+    spec: ServiceSpec,
+  },
   LaunchProcess {
     name:             String,
     process_name:     String,
@@ -107,8 +110,8 @@ pub fn get_hjz_directory() -> Result<String, Error> {
 pub fn guarantee_hjz_directory() -> Result<(), Error> {
   match std::fs::create_dir(get_hjz_directory()?) {
     Ok(_) => Ok(()),
-    Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
-    Err(err) => Err(err.into()),
+    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+    Err(e) => Err(e.into()),
   }
 }
 
@@ -161,9 +164,9 @@ pub fn get_target() -> Result<(String, HujingzhiTarget), Error> {
   let target_text = match std::fs::read_to_string(get_target_path()?) {
     Ok(target_text) => target_text,
     // Check just for file-not-found errors.
-    Err(err) if err.kind() == std::io::ErrorKind::NotFound =>
+    Err(e) if e.kind() == std::io::ErrorKind::NotFound =>
       include_str!("default-target.yaml").to_string(),
-    Err(err) => return Err(err.into()),
+    Err(e) => return Err(e.into()),
   };
   let target = serde_yaml::from_str(&target_text)?;
   Ok((target_text, target))
