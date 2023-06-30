@@ -78,7 +78,9 @@ async fn main_result() -> Result<(), Error> {
         let config_string = match (using_default_config_path, config_string_result) {
           (_, Ok(config_string)) => config_string,
           (true, Err(e)) if e.kind() == std::io::ErrorKind::NotFound => {
-            eprintln!("\x1b[91mNote:\x1b[0m Config file not found at {} -- writing default config", config_path);
+            hujingzhi::server::log_event(hujingzhi::LogEvent::Warning {
+              msg: format!("Config file not found at {} -- writing default config", config_path),
+            });
             guarantee_hjz_directory()?;
             let default_config = include_str!("../default-config.yaml");
             std::fs::write(&config_path, &default_config)?;

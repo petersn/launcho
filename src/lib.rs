@@ -133,7 +133,7 @@ pub fn get_auth_config(mode: GetAuthConfigMode) -> Result<AuthConfig, Error> {
   }
   #[cfg(target_os = "linux")]
   server::log_event(LogEvent::Warning {
-    msg: "No auth config found, generating one...".to_string(),
+    msg: format!("Auth file not found at {} -- generating a new one", config_path),
   });
   let subject_alt_names = vec!["hujingzhi".to_string()];
   let cert = rcgen::generate_simple_self_signed(subject_alt_names)?;
