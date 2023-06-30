@@ -55,6 +55,7 @@ async fn main_result() -> Result<(), Error> {
     }
     Action::PrintAuth => {
       let mut auth_config = hujingzhi::get_auth_config(GetAuthConfigMode::ServerFailIfNotExists)?;
+      auth_config.host = Some("change-me-to-point-to-the-server.example.com".to_string());
       auth_config.private = None;
       println!("# Paste this into ~/.hjz/hjz-client-auth.yaml on the client machine");
       print!("{}", serde_yaml::to_string(&auth_config)?);
