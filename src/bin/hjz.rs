@@ -1,12 +1,15 @@
 use anyhow::Error;
 use clap::Parser;
-use hujingzhi::{ipvs, ClientResponse};
+use hujingzhi::{ClientResponse, GetAuthConfigMode, get_config_path};
 
 #[derive(Debug, Parser)]
 #[clap(author, version, about, long_about = None)]
 struct Args {
   // #[clap(short, long, value_parser, default_value = "hjz-config.yaml")]
   // config: String,
+
+  #[clap(short, long, value_parser)]
+  auth: Option<String>,
 
   // #[clap(short, long)]
   // debug_mode: bool,
@@ -16,32 +19,26 @@ struct Args {
 
 #[derive(Debug, clap::Subcommand)]
 enum Action {
-  #[clap(about = "Print the version")]
   Version,
-  #[clap(about = "Print the default config file")]
-  PrintDefaultConfig,
   PrintAuth,
   Server {
     #[clap(short, long, value_parser, default_value = "hjz-config.yaml")]
-    config: String,
+    config: Option<String>,
   },
-  Ipvs,
   Ping,
   GetTarget,
   SetTarget {
     #[clap(short, long, value_parser, default_value = "hjz-target.yaml")]
-    path: String,
+    target: String,
   },
   Status {
     #[clap(long, action)]
     ipvs: bool,
   },
   Logs {
-    //#[clap(short, long)]
     process: String,
   },
   Restart {
-    //#[clap(short, long)]
     process: String,
   },
 }
@@ -64,11 +61,8 @@ async fn main_result() -> Result<(), Error> {
     Action::Version => {
       println!("hujingzhi {}", env!("CARGO_PKG_VERSION"));
     }
-    Action::PrintDefaultConfig => {
-      println!("{}", include_str!("../default-config.yaml"));
-    }
     Action::PrintAuth => {
-      let mut auth_config = hujingzhi::get_auth_config()?;
+      let mut auth_config = hujingzhi::get_auth_config(GetAuthConfigMode::ServerFailIfNotExists)?;
       auth_config.private = None;
       println!("{}", serde_yaml::to_string(&auth_config)?);
     }
@@ -83,14 +77,14 @@ async fn main_result() -> Result<(), Error> {
       #[cfg(target_os = "linux")]
       {
         // Parse the config file.
-        let config_string = std::fs::read_to_string(&config)?;
+        let config = match config {
+          Some(config) => config,
+          None => get_config_path()?,
+        };
+        let config_string = std::fs::read_to_string(config)?;
         let server_config = serde_yaml::from_str(&config_string)?;
         hujingzhi::server::server_main(server_config).await?
       }
-    }
-    Action::Ipvs => {
-      let state = ipvs::get_ipvs_state()?;
-      println!("{:#?}", state);
     }
     Action::Ping => {
       let pong = hujingzhi::send_request(hujingzhi::ClientRequest::Ping).await?;
@@ -104,8 +98,8 @@ async fn main_result() -> Result<(), Error> {
         _ => panic!("Unexpected response: {:?}", response),
       }
     }
-    Action::SetTarget { path } => {
-      let target_text = std::fs::read_to_string(&path)?;
+    Action::SetTarget { target } => {
+      let target_text = std::fs::read_to_string(&target)?;
       let response = handle_error_response(
         hujingzhi::send_request(hujingzhi::ClientRequest::SetTarget {
           target: target_text,

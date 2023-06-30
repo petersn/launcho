@@ -12,13 +12,13 @@ use tokio::{
 };
 use warp::Filter;
 
-use crate::ipvs;
 use crate::{
   config::{AuthConfig, HujingzhiConfig, HujingzhiTarget, ProcessSpec, Secrets},
-  get_auth_config, get_target, ClientRequest, ClientResponse, LogEvent,
-  ProcessStatus, DEFAULT_TARGET_PATH, SERVICE_IP_PREFIX,
+  get_auth_config, get_target, ClientRequest, ClientResponse, LogEvent, ProcessStatus, get_target_path,
 };
+use crate::{ipvs, GetAuthConfigMode};
 
+static SERVICE_IP_PREFIX: &str = "127.0.0.";
 static HOUSEKEEPING_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
 // FIXME: These two intervals can only be evaluated in increments of the housekeeping interval.
 static START_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
@@ -684,7 +684,7 @@ impl GlobalState {
         let mut target: HujingzhiTarget = serde_yaml::from_str(&target_text)?;
         target.apply_secrets(&self.secrets)?;
         Self::validate_target(&target)?;
-        std::fs::write(DEFAULT_TARGET_PATH, &target_text)?;
+        std::fs::write(get_target_path()?, &target_text)?;
         let mut synced = self.synced.lock().await;
         let changed = synced.target != target;
         synced.target_text = target_text;
@@ -778,7 +778,8 @@ pub async fn server_main(mut config: HujingzhiConfig) -> Result<(), Error> {
 
   let warp_global_state = warp::any().map(move || global_state);
 
-  let auth_config: &'static AuthConfig = Box::leak(Box::new(get_auth_config()?));
+  let auth_config: &'static AuthConfig =
+    Box::leak(Box::new(get_auth_config(GetAuthConfigMode::ServerCreateIfNotExists)?));
 
   #[derive(Debug)]
   struct MessageAndStatus(&'static str, warp::http::StatusCode);

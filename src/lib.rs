@@ -5,16 +5,11 @@ pub mod server;
 
 use std::collections::HashMap;
 
-use anyhow::Error;
+use anyhow::{Error, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::config::{AuthConfig, HujingzhiTarget, ServiceSpec};
 use crate::ipvs::IpvsState;
-
-static DEFAULT_AUTH_CONFIG_PATH: &str = ".hjz-auth.yaml";
-static DEFAULT_TARGET_PATH: &str = "hjz-target.yaml";
-#[allow(unused)] // Only used on Linux
-static SERVICE_IP_PREFIX: &str = "127.0.0.";
 
 fn make_cryptographic_token() -> String {
   use rand::RngCore;
@@ -98,18 +93,38 @@ pub enum ClientResponse {
   },
 }
 
-pub fn get_auth_config() -> Result<AuthConfig, Error> {
-  if let Ok(auth_config_string) = std::fs::read_to_string(DEFAULT_AUTH_CONFIG_PATH) {
+#[derive(PartialEq, Eq)]
+pub enum GetAuthConfigMode {
+  ServerCreateIfNotExists,
+  ServerFailIfNotExists,
+  Client,
+}
+
+pub fn get_auth_config(mode: GetAuthConfigMode) -> Result<AuthConfig, Error> {
+  let config_path_suffix = match mode {
+    GetAuthConfigMode::ServerCreateIfNotExists
+    | GetAuthConfigMode::ServerFailIfNotExists => "hjz-server-auth.yaml",
+    GetAuthConfigMode::Client => "hjz-client-auth.yaml",
+  };
+  let hjz_dir = format!("{}/.hjz", std::env::var("HOME")?);
+  let config_path = format!("{}/{}", hjz_dir, config_path_suffix);
+  if let Ok(auth_config_string) = std::fs::read_to_string(&config_path) {
     let auth_config: AuthConfig = serde_yaml::from_str(&auth_config_string)?;
     return Ok(auth_config);
+  }
+  match mode {
+    GetAuthConfigMode::ServerFailIfNotExists => 
+      bail!("Auth info not found at {}\nStart the server to create the auth.", config_path),
+    GetAuthConfigMode::Client =>
+      bail!("Auth info not found at {}\nOn the server run `hjz print-auth`, and paste the result into a file at {}", config_path, config_path),
+    GetAuthConfigMode::ServerCreateIfNotExists => {},
   }
   #[cfg(target_os = "linux")]
   server::log_event(LogEvent::Warning {
     msg: "No auth config found, generating one...".to_string(),
   });
-  use rcgen::generate_simple_self_signed;
   let subject_alt_names = vec!["hujingzhi".to_string()];
-  let cert = generate_simple_self_signed(subject_alt_names)?;
+  let cert = rcgen::generate_simple_self_signed(subject_alt_names)?;
   let auth_config = AuthConfig {
     host:    Some("example.com".to_string()),
     cert:    cert.serialize_pem()?,
@@ -117,12 +132,25 @@ pub fn get_auth_config() -> Result<AuthConfig, Error> {
     token:   make_cryptographic_token(),
   };
   let auth_config_yaml = serde_yaml::to_string(&auth_config)?;
-  std::fs::write(DEFAULT_AUTH_CONFIG_PATH, &auth_config_yaml)?;
+  match std::fs::create_dir(&hjz_dir) {
+    Ok(_) => {}
+    Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
+    Err(err) => return Err(err.into()),
+  }
+  std::fs::write(config_path, &auth_config_yaml)?;
   Ok(auth_config)
 }
 
+pub fn get_config_path() -> Result<String, Error> {
+  Ok(format!("{}/.hjz/hjz-config.yaml", std::env::var("HOME")?))
+}
+
+pub fn get_target_path() -> Result<String, Error> {
+  Ok(format!("{}/.hjz/hjz-target.yaml", std::env::var("HOME")?))
+}
+
 pub fn get_target() -> Result<(String, HujingzhiTarget), Error> {
-  let target_text = match std::fs::read_to_string(DEFAULT_TARGET_PATH) {
+  let target_text = match std::fs::read_to_string(get_target_path()?) {
     Ok(target_text) => target_text,
     // Check just for file-not-found errors.
     Err(err) if err.kind() == std::io::ErrorKind::NotFound =>
@@ -139,7 +167,7 @@ pub async fn send_request(request: ClientRequest) -> Result<ClientResponse, Erro
   use base64::{engine::general_purpose, Engine};
   use reqwest::header;
 
-  let auth_config = get_auth_config()?;
+  let auth_config = get_auth_config(GetAuthConfigMode::Client)?;
   let host = auth_config.host.as_ref().unwrap();
   let (_, port) = ipvs::parse_host_and_port(host)?;
   let addrs: Vec<_> = host.to_socket_addrs()?.collect();
