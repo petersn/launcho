@@ -5,14 +5,6 @@ use hujingzhi::{ClientResponse, GetAuthConfigMode, get_config_path, guarantee_hj
 #[derive(Debug, Parser)]
 #[clap(author, version, about, long_about = None)]
 struct Args {
-  // #[clap(short, long, value_parser, default_value = "hjz-config.yaml")]
-  // config: String,
-
-  #[clap(short, long, value_parser)]
-  auth: Option<String>,
-
-  // #[clap(short, long)]
-  // debug_mode: bool,
   #[clap(subcommand)]
   action: Action,
 }
@@ -22,7 +14,7 @@ enum Action {
   Version,
   PrintAuth,
   Server {
-    #[clap(short, long, value_parser, default_value = "hjz-config.yaml")]
+    #[clap(short, long, value_parser)]
     config: Option<String>,
   },
   Ping,
