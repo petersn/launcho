@@ -138,7 +138,7 @@ pub fn get_auth_config(mode: GetAuthConfigMode) -> Result<AuthConfig, Error> {
   let subject_alt_names = vec!["hujingzhi".to_string()];
   let cert = rcgen::generate_simple_self_signed(subject_alt_names)?;
   let auth_config = AuthConfig {
-    host:    Some("example.com".to_string()),
+    host:    Some("change-me-to-point-to-the-server.example.com".to_string()),
     cert:    cert.serialize_pem()?,
     private: Some(cert.serialize_private_key_pem()),
     token:   make_cryptographic_token(),

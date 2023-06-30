@@ -56,7 +56,8 @@ async fn main_result() -> Result<(), Error> {
     Action::PrintAuth => {
       let mut auth_config = hujingzhi::get_auth_config(GetAuthConfigMode::ServerFailIfNotExists)?;
       auth_config.private = None;
-      println!("{}", serde_yaml::to_string(&auth_config)?);
+      println!("# Paste this into ~/.hjz/hjz-client-auth.yaml on the client machine");
+      print!("{}", serde_yaml::to_string(&auth_config)?);
     }
     Action::Server { config: maybe_config_path } => {
       // Check if we're on Linux.
