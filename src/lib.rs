@@ -127,14 +127,15 @@ pub fn get_hjz_directory() -> Result<String, Error> {
   Ok(format!("{}/.hjz", std::env::var("HOME")?))
 }
 
-pub fn guarantee_hjz_directory() -> Result<(), Error> {
-  fn already_exists_ok(result: std::io::Result<()>) -> std::io::Result<()> {
-    match result {
-      Ok(()) => Ok(()),
-      Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
-      Err(e) => Err(e),
-    }
+pub fn already_exists_ok(result: std::io::Result<()>) -> std::io::Result<()> {
+  match result {
+    Ok(()) => Ok(()),
+    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+    Err(e) => Err(e),
   }
+}
+
+pub fn guarantee_hjz_directory() -> Result<(), Error> {
   let hjz_dir = get_hjz_directory()?;
   already_exists_ok(std::fs::create_dir(&hjz_dir))?;
   already_exists_ok(std::fs::create_dir(format!("{}/{}", hjz_dir, "storage")))?;

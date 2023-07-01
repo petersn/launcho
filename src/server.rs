@@ -389,7 +389,6 @@ impl GlobalState {
           return Err(e);
         }
       };
-      //println!("\x1b[92m[I]\x1b[0m Allocated port {} for service {}", port, service_name);
       port_allocations.insert(service_name.clone(), port);
     }
 
@@ -397,9 +396,12 @@ impl GlobalState {
     let cwd = match &process_spec.cwd {
       Some(cwd) => PathBuf::from(cwd),
       None => {
-        let temp_dir = tempfile::tempdir()?;
-        command.current_dir(temp_dir.path());
-        temp_dir.path().to_owned()
+        // FIXME: Clean this stuff up.
+        crate::already_exists_ok(std::fs::create_dir(&"/tmp/hjz-procs"))?;
+        let nonce: u128 = rand::random();
+        let path = format!("/tmp/hjz-procs/tmp-{:x}", nonce);
+        command.current_dir(&path);
+        PathBuf::from(path)
       }
     };
     command.current_dir(&cwd);
@@ -408,7 +410,6 @@ impl GlobalState {
       let target = cwd.join(&resource_request.file);
       storage::copy_resource(&resource_request.id, &target)?;
     }
-    println!("\x1b[92m[I]\x1b[0m Launching process: {:?}", process_spec.command);
     // Perform the optional before command.
     if let Some(before) = &process_spec.before {
       let output = std::process::Command::new("sh").arg("-c").arg(before).output();
@@ -428,7 +429,6 @@ impl GlobalState {
         }
       }
     }
-    println!("\x1b[92m[I]\x1b[0m Launching process2: {:?}", process_spec.command);
     if let Some(uid) = &process_spec.uid {
       command.uid(uid.to_uid()?);
     }
@@ -445,6 +445,7 @@ impl GlobalState {
     command.stdin(Stdio::null());
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
+    // FIXME: I should try to find a way to distinguish between the binary and cwd not being found.
     let process = command.spawn().with_context(|| {
       format!(
         "Failed to launch process {:?}",
@@ -469,7 +470,6 @@ impl GlobalState {
       // If there's no health check, then the process is always considered healthy.
       return Ok(true);
     };
-    //println!("\x1b[92m[I]\x1b[0m Checking health of process {:?}", process_spec.name);
     let service_port = *entry
       .port_allocations
       .get(&health_check_spec.service)
