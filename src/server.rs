@@ -1,7 +1,7 @@
 use std::{
   collections::{HashMap, HashSet, VecDeque},
   process::Stdio,
-  sync::{atomic, Arc, Mutex},
+  sync::{atomic, Arc, Mutex}, path::PathBuf,
 };
 
 use anyhow::{anyhow, bail, Error};
@@ -176,13 +176,14 @@ struct RunningProcessEntry {
   approx_conn_count: i32,
   process:           tokio::process::Child,
   name:              String,
+  cwd:               PathBuf,
   /// Maps service name to port number.
   port_allocations:  HashMap<String, u16>,
   output:            Arc<SpooledOutput>,
 }
 
 impl RunningProcessEntry {
-  fn new(mut process: tokio::process::Child, port_allocations: HashMap<String, u16>) -> Self {
+  fn new(mut process: tokio::process::Child, cwd: PathBuf, port_allocations: HashMap<String, u16>) -> Self {
     let pid = process.id().unwrap_or(u32::MAX);
     let name = format!("{}-{}-{}", make_random_word(), get_counter(), pid);
     let stdout = process.stdout.take().unwrap();
@@ -193,6 +194,7 @@ impl RunningProcessEntry {
       approx_conn_count: 0,
       process,
       name,
+      cwd,
       port_allocations,
       output: SpooledOutput::new(stdout, stderr),
     }
@@ -332,8 +334,45 @@ impl GlobalState {
 
     //let executable_path = std::fs::canonicalize(&process_spec.command[0])?;
     let mut process = tokio::process::Command::new(&process_spec.command[0]);
-    if let Some(cwd) = &process_spec.cwd {
-      process.current_dir(cwd);
+    let cwd = match &process_spec.cwd {
+      Some(cwd) => PathBuf::from(cwd),
+      None => {
+        let temp_dir = tempfile::tempdir()?;
+        process.current_dir(temp_dir.path());
+        temp_dir.path().to_owned()
+      }
+    };
+    process.current_dir(&cwd);
+    // Unpack requested resources.
+    for resource_request in &process_spec.resources {
+      let target = cwd.join(&resource_request.file);
+      storage::copy_resource(&resource_request.id, &target)?;
+    }
+    // Perform the optional before command.
+    if let Some(before) = &process_spec.before {
+      let output = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(before)
+        .output();
+      match output {
+        Ok(output) => {
+          if !output.status.success() {
+            log_event(LogEvent::Error {
+              msg: format!(
+                "Before command failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+              ),
+            });
+            return Err(anyhow!("Before command failed"));
+          }
+        }
+        Err(e) => {
+          log_event(LogEvent::Error {
+            msg: format!("Failed to run before command: {}", e),
+          });
+          return Err(anyhow!("Failed to run before command"));
+        }
+      }
     }
     if let Some(uid) = &process_spec.uid {
       process.uid(uid.to_uid()?);
@@ -352,7 +391,7 @@ impl GlobalState {
     process.stdout(Stdio::piped());
     process.stderr(Stdio::piped());
     let process = process.spawn()?;
-    let entry = RunningProcessEntry::new(process, port_allocations.clone());
+    let entry = RunningProcessEntry::new(process, cwd, port_allocations.clone());
     log_event(LogEvent::LaunchProcess {
       name: entry.name.clone(),
       process_name: process_spec.name.clone(),
@@ -756,8 +795,8 @@ impl GlobalState {
           for (_, entry) in &process_set.running_versions {
             let duration = entry.approx_start.elapsed();
             formatted_status.push_str(&format!(
-              "  {}: {:?} (run-time: {:?})\n",
-              entry.name, entry.status, duration
+              "  {}: {:?} (run-time: {:?}) (cwd: {:?})\n",
+              entry.name, entry.status, duration, entry.cwd
             ));
             formatted_status.push_str("    ports:");
             for (service_name, port) in &entry.port_allocations {
@@ -802,27 +841,27 @@ impl GlobalState {
           Err(message) => ClientResponse::Error { message },
         }
       }
-      ClientRequest::UploadTarball { name, data } => {
-        storage::write_tarball(name, &data)?;
+      ClientRequest::UploadResource { name, data } => {
+        storage::write_resource(name, &data)?;
         ClientResponse::Success { message: None }
       }
-      ClientRequest::DownloadTarball { id } => match storage::read_tarball(&id) {
-        Ok(data) => ClientResponse::Tarball { id, data },
+      ClientRequest::DownloadResource { id } => match storage::read_resource(&id) {
+        Ok(data) => ClientResponse::Resource { id, data },
         Err(message) => ClientResponse::Error { message: message.to_string() },
       },
-      ClientRequest::DeleteTarballs { ids } => {
+      ClientRequest::DeleteResources { ids } => {
         let errors =
-          ids.iter().filter_map(|id| storage::delete_tarball(id).err()).collect::<Vec<_>>();
+          ids.iter().filter_map(|id| storage::delete_resource(id).err()).collect::<Vec<_>>();
         if errors.is_empty() {
           ClientResponse::Success { message: None }
         } else {
           ClientResponse::Error {
-            message: format!("Failed to delete tarballs: {:?}", errors),
+            message: format!("Failed to delete resources: {:?}", errors),
           }
         }
       }
-      ClientRequest::ListTarballs => ClientResponse::TarballList {
-        tarballs: storage::list_tarballs()?,
+      ClientRequest::ListResources => ClientResponse::ResourceList {
+        resources: storage::list_resources()?,
       },
     })
   }

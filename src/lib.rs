@@ -64,7 +64,7 @@ pub enum LogEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TarballListEntry {
+pub struct ResourceListEntry {
   pub id:   String,
   pub name: String,
   pub size: u64,
@@ -79,10 +79,10 @@ pub enum ClientRequest {
   Status,
   GetLogs { name: String },
   Restart { name: String },
-  UploadTarball { name: String, data: Vec<u8> },
-  DownloadTarball { id: String },
-  DeleteTarballs { ids: Vec<String> },
-  ListTarballs,
+  UploadResource { name: String, data: Vec<u8> },
+  DownloadResource { id: String },
+  DeleteResources { ids: Vec<String> },
+  ListResources,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -107,12 +107,12 @@ pub enum ClientResponse {
     name:   String,
     output: String,
   },
-  Tarball {
+  Resource {
     id:   String,
     data: Vec<u8>,
   },
-  TarballList {
-    tarballs: Vec<TarballListEntry>,
+  ResourceList {
+    resources: Vec<ResourceListEntry>,
   },
 }
 

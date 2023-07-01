@@ -33,18 +33,19 @@ enum Action {
   Restart {
     process: String,
   },
-  UploadTarball {
-    name: String,
+  Upload {
     path: String,
+    #[clap(short, long)]
+    name: Option<String>,
   },
-  DownloadTarball {
+  Download {
     id: String,
     path: String,
   },
-  DeleteTarballs {
+  DeleteResources {
     ids: Vec<String>,
   },
-  ListTarballs,
+  ListResources,
 }
 
 fn handle_error_response(response: ClientResponse) -> ClientResponse {
@@ -183,11 +184,11 @@ async fn main_result() -> Result<(), Error> {
         _ => panic!("Unexpected response: {:?}", response),
       }
     }
-    Action::UploadTarball { name, path } => {
+    Action::Upload { name, path } => {
       let data = std::fs::read(&path)?;
       let response = handle_error_response(
-        hujingzhi::send_request(hujingzhi::ClientRequest::UploadTarball {
-          name,
+        hujingzhi::send_request(hujingzhi::ClientRequest::UploadResource {
+          name: name.unwrap_or(path),
           data,
         })
         .await?,
@@ -201,12 +202,12 @@ async fn main_result() -> Result<(), Error> {
         _ => panic!("Unexpected response: {:?}", response),
       }
     }
-    Action::DownloadTarball { id, path } => {
+    Action::Download { id, path } => {
       let response = handle_error_response(
-        hujingzhi::send_request(hujingzhi::ClientRequest::DownloadTarball { id }).await?,
+        hujingzhi::send_request(hujingzhi::ClientRequest::DownloadResource { id }).await?,
       );
       match response {
-        ClientResponse::Tarball { id: _, data } => {
+        ClientResponse::Resource { id: _, data } => {
           std::fs::write(&path, data)?;
           println!("Success");
         }
@@ -214,9 +215,9 @@ async fn main_result() -> Result<(), Error> {
         _ => panic!("Unexpected response: {:?}", response),
       }
     }
-    Action::DeleteTarballs { ids } => {
+    Action::DeleteResources { ids } => {
       let response = handle_error_response(
-        hujingzhi::send_request(hujingzhi::ClientRequest::DeleteTarballs { ids }).await?,
+        hujingzhi::send_request(hujingzhi::ClientRequest::DeleteResources { ids }).await?,
       );
       match response {
         ClientResponse::Success { message: None } => println!("Success"),
@@ -227,14 +228,14 @@ async fn main_result() -> Result<(), Error> {
         _ => panic!("Unexpected response: {:?}", response),
       }
     }
-    Action::ListTarballs => {
+    Action::ListResources => {
       let response =
-        handle_error_response(hujingzhi::send_request(hujingzhi::ClientRequest::ListTarballs).await?);
+        handle_error_response(hujingzhi::send_request(hujingzhi::ClientRequest::ListResources).await?);
       match response {
-        ClientResponse::TarballList { tarballs } => {
-          println!("Found {} tarballs", tarballs.len());
-          for tarball in tarballs {
-            println!("{} [{:9} bytes] {}", tarball.id, tarball.size, tarball.name);
+        ClientResponse::ResourceList { resources } => {
+          println!("Found {} resources", resources.len());
+          for resource in resources {
+            println!("{} [{:9} bytes] {}", resource.id, resource.size, resource.name);
           }
         }
         _ => panic!("Unexpected response: {:?}", response),

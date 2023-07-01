@@ -141,30 +141,52 @@ impl UidOrUsername {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ResourceRequest {
+  pub id:  String,
+  pub file: String,
+}
+
+impl ResourceRequest {
+  pub fn apply_secrets(&mut self, secrets: &Secrets) -> Result<(), Error> {
+    self.id = secrets.substitute(&self.id)?;
+    self.file = secrets.substitute(&self.file)?;
+    Ok(())
+  }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProcessSpec {
-  pub name:     String,
-  pub tarball:  Option<String>,
-  pub command:  Vec<String>,
+  pub name:      String,
+  pub cwd:       Option<String>,
+  pub resources: Vec<ResourceRequest>,
+  pub before:    Option<String>,
+  pub command:   Vec<String>,
   #[serde(default)]
-  pub env:      BTreeMap<String, String>,
-  pub receives: Vec<String>,
-  pub health:   Option<HealthCheckSpec>,
-  pub uid:      Option<UidOrUsername>,
-  pub gid:      Option<UidOrUsername>,
-  pub cwd:      Option<String>,
+  pub env:       BTreeMap<String, String>,
+  pub receives:  Vec<String>,
+  pub health:    Option<HealthCheckSpec>,
+  pub uid:       Option<UidOrUsername>,
+  pub gid:       Option<UidOrUsername>,
 }
 
 impl ProcessSpec {
   pub fn apply_secrets(&mut self, secrets: &Secrets) -> Result<(), Error> {
     self.name = secrets.substitute(&self.name)?;
-    if let Some(tarball) = &mut self.tarball {
-      *tarball = secrets.substitute(tarball)?;
+    if let Some(cwd) = &mut self.cwd {
+      *cwd = secrets.substitute(cwd)?;
+    }
+    for resource in &mut self.resources {
+      resource.apply_secrets(secrets)?;
+    }
+    if let Some(before) = &mut self.before {
+      *before = secrets.substitute(before)?;
     }
     for command in &mut self.command {
       *command = secrets.substitute(command)?;
     }
-    for value in self.env.values_mut() {
-      *value = secrets.substitute(value)?;
+    for env in self.env.values_mut() {
+      *env = secrets.substitute(env)?;
     }
     for receive in &mut self.receives {
       *receive = secrets.substitute(receive)?;
