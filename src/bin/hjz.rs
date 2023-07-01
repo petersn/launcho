@@ -39,7 +39,7 @@ enum Action {
     name: Option<String>,
   },
   Download {
-    id: String,
+    id:   String,
     path: String,
   },
   DeleteResources {
@@ -229,8 +229,9 @@ async fn main_result() -> Result<(), Error> {
       }
     }
     Action::ListResources => {
-      let response =
-        handle_error_response(hujingzhi::send_request(hujingzhi::ClientRequest::ListResources).await?);
+      let response = handle_error_response(
+        hujingzhi::send_request(hujingzhi::ClientRequest::ListResources).await?,
+      );
       match response {
         ClientResponse::ResourceList { resources } => {
           println!("Found {} resources", resources.len());

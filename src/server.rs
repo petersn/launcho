@@ -1,7 +1,8 @@
 use std::{
   collections::{HashMap, HashSet, VecDeque},
+  path::PathBuf,
   process::Stdio,
-  sync::{atomic, Arc, Mutex}, path::PathBuf,
+  sync::{atomic, Arc, Mutex},
 };
 
 use anyhow::{anyhow, bail, Error};
@@ -14,17 +15,26 @@ use warp::Filter;
 
 use crate::{
   config::{AuthConfig, HujingzhiConfig, HujingzhiTarget, ProcessSpec, Secrets, ServiceSpec},
-  get_auth_config, get_target, get_target_path, storage, ClientRequest, ClientResponse, LogEvent,
-  ProcessStatus, guarantee_hjz_directory,
+  get_auth_config, get_target, get_target_path, guarantee_hjz_directory, storage, ClientRequest,
+  ClientResponse, LogEvent, ProcessStatus,
 };
 use crate::{ipvs, GetAuthConfigMode};
 
 static SERVICE_IP_PREFIX: &str = "127.0.0.";
 static HOUSEKEEPING_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
-// FIXME: These two intervals can only be evaluated in increments of the housekeeping interval.
-static START_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
-static HEALTH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
 static CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+// FIXME: These rate limits can only be evaluated in increments of the housekeeping interval.
+static START_RATE_LIMIT: &RateLimit = &RateLimit {
+  duration:         std::time::Duration::from_secs(30),
+  backoff_duration: std::time::Duration::from_secs(1200),
+  max_attempts:     3,
+};
+static HEALTH_CHECK_RATE_LIMIT: &RateLimit = &RateLimit {
+  duration:         std::time::Duration::from_secs(60),
+  backoff_duration: std::time::Duration::from_secs(60),
+  max_attempts:     1,
+};
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
   use subtle::ConstantTimeEq;
@@ -109,24 +119,70 @@ pub fn get_entire_log() -> Vec<LogEvent> {
   LOG_EVENTS.lock().unwrap().iter().cloned().collect()
 }
 
-static RATE_LIMITING: Mutex<Option<HashMap<String, std::time::Instant>>> = Mutex::new(None);
+static RATE_LIMITING: Mutex<Option<HashMap<String, Vec<std::time::Instant>>>> = Mutex::new(None);
 
-pub fn rate_limit(key: String, duration: std::time::Duration) -> bool {
-  let mut map_guard = RATE_LIMITING.lock().unwrap();
-  let map = match map_guard.as_mut() {
-    Some(map) => map,
-    None => {
-      *map_guard = Some(HashMap::new());
-      map_guard.as_mut().unwrap()
-    }
+macro_rules! get_rate_limiting {
+  ($map:ident) => {
+    let mut map_guard = RATE_LIMITING.lock().unwrap();
+    let $map = match map_guard.as_mut() {
+      Some(map) => map,
+      None => {
+        *map_guard = Some(HashMap::new());
+        map_guard.as_mut().unwrap()
+      }
+    };
   };
+}
+
+#[derive(PartialEq, Eq)]
+pub enum RateLimitResult {
+  Success,
+  RateLimited,
+  Backoff,
+}
+
+impl RateLimitResult {
+  pub fn is_success(&self) -> bool {
+    match self {
+      RateLimitResult::Success => true,
+      _ => false,
+    }
+  }
+}
+
+pub struct RateLimit {
+  duration:         std::time::Duration,
+  backoff_duration: std::time::Duration,
+  max_attempts:     usize,
+}
+
+// NB: count must always have the same value for a particular key.
+pub fn check_rate_limit(key: String, rate_limit: &RateLimit) -> RateLimitResult {
+  get_rate_limiting!(map);
+  let occurrences = map.entry(key).or_insert(Vec::new());
   let now = std::time::Instant::now();
-  let last = map.entry(key).or_insert(now);
-  if now.duration_since(*last) > duration {
-    *last = now;
-    true
-  } else {
-    false
+  if let Some(last) = occurrences.last() {
+    if now.duration_since(*last) < rate_limit.duration {
+      return RateLimitResult::RateLimited;
+    }
+  }
+  if let Some(first) = occurrences.first() {
+    if occurrences.len() >= rate_limit.max_attempts
+      && now.duration_since(*first) < rate_limit.backoff_duration
+    {
+      return RateLimitResult::Backoff;
+    }
+  }
+  RateLimitResult::Success
+}
+
+pub fn rate_limit_event(key: String, rate_limit: &RateLimit) {
+  get_rate_limiting!(map);
+  let occurrences = map.entry(key).or_insert(Vec::new());
+  let now = std::time::Instant::now();
+  occurrences.push(now);
+  while occurrences.len() > rate_limit.max_attempts {
+    occurrences.remove(0);
   }
 }
 
@@ -183,7 +239,11 @@ struct RunningProcessEntry {
 }
 
 impl RunningProcessEntry {
-  fn new(mut process: tokio::process::Child, cwd: PathBuf, port_allocations: HashMap<String, u16>) -> Self {
+  fn new(
+    mut process: tokio::process::Child,
+    cwd: PathBuf,
+    port_allocations: HashMap<String, u16>,
+  ) -> Self {
     let pid = process.id().unwrap_or(u32::MAX);
     let name = format!("{}-{}-{}", make_random_word(), get_counter(), pid);
     let stdout = process.stdout.take().unwrap();
@@ -350,22 +410,15 @@ impl GlobalState {
     }
     // Perform the optional before command.
     if let Some(before) = &process_spec.before {
-      let output = std::process::Command::new("sh")
-        .arg("-c")
-        .arg(before)
-        .output();
+      let output = std::process::Command::new("sh").arg("-c").arg(before).output();
       match output {
-        Ok(output) => {
+        Ok(output) =>
           if !output.status.success() {
             log_event(LogEvent::Error {
-              msg: format!(
-                "Before command failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-              ),
+              msg: format!("Before command failed: {}", String::from_utf8_lossy(&output.stderr)),
             });
             return Err(anyhow!("Before command failed"));
-          }
-        }
+          },
         Err(e) => {
           log_event(LogEvent::Error {
             msg: format!("Failed to run before command: {}", e),
@@ -559,9 +612,11 @@ impl GlobalState {
       }
       // Perform health checks on running processes.
       for (spec, entry) in &mut process_set.running_versions {
+        let rate_limit_key = format!("health:{}", entry.name);
         if entry.status == ProcessStatus::Running
-          && rate_limit(format!("health:{}", entry.name), HEALTH_INTERVAL)
+          && check_rate_limit(rate_limit_key.clone(), HEALTH_CHECK_RATE_LIMIT).is_success()
         {
+          rate_limit_event(rate_limit_key, HEALTH_CHECK_RATE_LIMIT);
           // FIXME: Blocking on this potentially slow health check is bad.
           if !self.health_check(spec, entry).await? {
             update_status!(entry, ProcessStatus::Unhealthy);
@@ -570,9 +625,11 @@ impl GlobalState {
       }
       // Perform start-up checks on starting processes.
       if let Some((spec, entry)) = process_set.running_versions.last_mut() {
+        let rate_limit_key = format!("start:{}", entry.name);
         if entry.status == ProcessStatus::Starting
-          && rate_limit(format!("start:{}", entry.name), START_INTERVAL)
+          && check_rate_limit(rate_limit_key.clone(), START_RATE_LIMIT).is_success()
         {
+          rate_limit_event(rate_limit_key, START_RATE_LIMIT);
           // FIXME: Blocking on this potentially slow health check is bad.
           if self.health_check(spec, entry).await? {
             update_status!(entry, ProcessStatus::Running);
@@ -795,9 +852,16 @@ impl GlobalState {
           for (_, entry) in &process_set.running_versions {
             let duration = entry.approx_start.elapsed();
             formatted_status.push_str(&format!(
-              "  {}: {:?} (run-time: {:?}) (cwd: {:?})\n",
+              "  {}: {:?} (run-time: {:?}) (cwd: {:?})",
               entry.name, entry.status, duration, entry.cwd
             ));
+            if entry.status == ProcessStatus::Starting
+              && check_rate_limit(format!("start:{}", process_name), START_RATE_LIMIT)
+                == RateLimitResult::Backoff
+            {
+              formatted_status.push_str(" (too many crashes -- backing off)");
+            }
+            formatted_status.push_str("\n");
             formatted_status.push_str("    ports:");
             for (service_name, port) in &entry.port_allocations {
               formatted_status.push_str(&format!(" {}:{}", service_name, port));
@@ -847,7 +911,9 @@ impl GlobalState {
       }
       ClientRequest::DownloadResource { id } => match storage::read_resource(&id) {
         Ok(data) => ClientResponse::Resource { id, data },
-        Err(message) => ClientResponse::Error { message: message.to_string() },
+        Err(message) => ClientResponse::Error {
+          message: message.to_string(),
+        },
       },
       ClientRequest::DeleteResources { ids } => {
         let errors =

@@ -142,7 +142,7 @@ impl UidOrUsername {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ResourceRequest {
-  pub id:  String,
+  pub id:   String,
   pub file: String,
 }
 
