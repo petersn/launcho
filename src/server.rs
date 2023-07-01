@@ -26,14 +26,22 @@ static CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 // FIXME: These rate limits can only be evaluated in increments of the housekeeping interval.
 static START_RATE_LIMIT: &RateLimit = &RateLimit {
-  duration:         std::time::Duration::from_secs(30),
-  backoff_duration: std::time::Duration::from_secs(1200),
-  max_attempts:     3,
+  prefix:           "start",
+  duration:         std::time::Duration::from_secs(2),
+  backoff_duration: std::time::Duration::from_secs(5),
+  max_attempts:     2,
 };
 static HEALTH_CHECK_RATE_LIMIT: &RateLimit = &RateLimit {
+  prefix:           "health_check",
   duration:         std::time::Duration::from_secs(60),
   backoff_duration: std::time::Duration::from_secs(60),
   max_attempts:     1,
+};
+static LAUNCH_RATE_LIMIT: &RateLimit = &RateLimit {
+  prefix:           "launch",
+  duration:         std::time::Duration::from_secs(30),
+  backoff_duration: std::time::Duration::from_secs(1200),
+  max_attempts:     3,
 };
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
@@ -86,6 +94,7 @@ fn test_port(port: u16) -> Result<bool, Error> {
     )
   };
   if setsockopt_result != 0 {
+    unsafe { libc::close(socket) };
     bail!("Failed to set SO_REUSEADDR on socket: {}", std::io::Error::last_os_error());
   }
   let bind_result =
@@ -151,13 +160,15 @@ impl RateLimitResult {
 }
 
 pub struct RateLimit {
+  prefix:           &'static str,
   duration:         std::time::Duration,
   backoff_duration: std::time::Duration,
   max_attempts:     usize,
 }
 
 // NB: count must always have the same value for a particular key.
-pub fn check_rate_limit(key: String, rate_limit: &RateLimit) -> RateLimitResult {
+pub fn check_rate_limit(key: &str, rate_limit: &RateLimit) -> RateLimitResult {
+  let key = format!("{}:{}", rate_limit.prefix, key);
   get_rate_limiting!(map);
   let occurrences = map.entry(key).or_insert(Vec::new());
   let now = std::time::Instant::now();
@@ -176,7 +187,8 @@ pub fn check_rate_limit(key: String, rate_limit: &RateLimit) -> RateLimitResult 
   RateLimitResult::Success
 }
 
-pub fn rate_limit_event(key: String, rate_limit: &RateLimit) {
+pub fn rate_limit_event(key: &str, rate_limit: &RateLimit) {
+  let key = format!("{}:{}", rate_limit.prefix, key);
   get_rate_limiting!(map);
   let occurrences = map.entry(key).or_insert(Vec::new());
   let now = std::time::Instant::now();
@@ -400,6 +412,7 @@ impl GlobalState {
         crate::already_exists_ok(std::fs::create_dir(&"/tmp/hjz-procs"))?;
         let nonce: u128 = rand::random();
         let path = format!("/tmp/hjz-procs/tmp-{:x}", nonce);
+        crate::already_exists_ok(std::fs::create_dir(&path))?;
         command.current_dir(&path);
         PathBuf::from(path)
       }
@@ -557,17 +570,20 @@ impl GlobalState {
         ) if *target_spec == running_version => {}
         // Otherwise, launch a new version.
         (Some(target_spec), _) => {
-          let process_entry =
-            match self.launch_process(free_loopback_ports, allocated_ports, target_spec) {
-              Ok(process_entry) => process_entry,
-              Err(e) => {
-                log_event(LogEvent::Error {
-                  msg: format!("Failed to launch process {}: {}", process_name, e),
-                });
-                continue;
-              }
-            };
-          process_set.running_versions.push((ProcessSpec::clone(target_spec), process_entry));
+          if check_rate_limit(&process_name, LAUNCH_RATE_LIMIT).is_success() {
+            rate_limit_event(&process_name, LAUNCH_RATE_LIMIT);
+            let process_entry =
+              match self.launch_process(free_loopback_ports, allocated_ports, target_spec) {
+                Ok(process_entry) => process_entry,
+                Err(e) => {
+                  log_event(LogEvent::Error {
+                    msg: format!("Failed to launch process {}: {}", process_name, e),
+                  });
+                  continue;
+                }
+              };
+            process_set.running_versions.push((ProcessSpec::clone(target_spec), process_entry));
+          }
         }
       };
     }
@@ -619,11 +635,10 @@ impl GlobalState {
       }
       // Perform health checks on running processes.
       for (spec, entry) in &mut process_set.running_versions {
-        let rate_limit_key = format!("health:{}", entry.name);
         if entry.status == ProcessStatus::Running
-          && check_rate_limit(rate_limit_key.clone(), HEALTH_CHECK_RATE_LIMIT).is_success()
+          && check_rate_limit(&entry.name, HEALTH_CHECK_RATE_LIMIT).is_success()
         {
-          rate_limit_event(rate_limit_key, HEALTH_CHECK_RATE_LIMIT);
+          rate_limit_event(&entry.name, HEALTH_CHECK_RATE_LIMIT);
           // FIXME: Blocking on this potentially slow health check is bad.
           if !self.health_check(spec, entry).await? {
             update_status!(entry, ProcessStatus::Unhealthy);
@@ -632,11 +647,10 @@ impl GlobalState {
       }
       // Perform start-up checks on starting processes.
       if let Some((spec, entry)) = process_set.running_versions.last_mut() {
-        let rate_limit_key = format!("start:{}", entry.name);
         if entry.status == ProcessStatus::Starting
-          && check_rate_limit(rate_limit_key.clone(), START_RATE_LIMIT).is_success()
+          && check_rate_limit(&entry.name, START_RATE_LIMIT).is_success()
         {
-          rate_limit_event(rate_limit_key, START_RATE_LIMIT);
+          rate_limit_event(&entry.name, START_RATE_LIMIT);
           // FIXME: Blocking on this potentially slow health check is bad.
           if self.health_check(spec, entry).await? {
             update_status!(entry, ProcessStatus::Running);
@@ -863,7 +877,7 @@ impl GlobalState {
               entry.name, entry.status, duration, entry.cwd
             ));
             if entry.status == ProcessStatus::Starting
-              && check_rate_limit(format!("start:{}", process_name), START_RATE_LIMIT)
+              && check_rate_limit(&process_name, LAUNCH_RATE_LIMIT)
                 == RateLimitResult::Backoff
             {
               formatted_status.push_str(" (too many crashes -- backing off)");
