@@ -1,6 +1,6 @@
-use anyhow::{Error, bail};
+use anyhow::{bail, Error};
 use clap::Parser;
-use hujingzhi::{ClientResponse, GetAuthConfigMode, get_config_path, guarantee_hjz_directory};
+use hujingzhi::{get_config_path, guarantee_hjz_directory, ClientResponse, GetAuthConfigMode};
 
 #[derive(Debug, Parser)]
 #[clap(author, version, about, long_about = None)]
@@ -60,7 +60,9 @@ async fn main_result() -> Result<(), Error> {
       println!("# Paste this into ~/.hjz/hjz-client-auth.yaml on the client machine");
       print!("{}", serde_yaml::to_string(&auth_config)?);
     }
-    Action::Server { config: maybe_config_path } => {
+    Action::Server {
+      config: maybe_config_path,
+    } => {
       // Check if we're on Linux.
       #[cfg(not(target_os = "linux"))]
       {

@@ -14,7 +14,8 @@ use warp::Filter;
 
 use crate::{
   config::{AuthConfig, HujingzhiConfig, HujingzhiTarget, ProcessSpec, Secrets, ServiceSpec},
-  get_auth_config, get_target, ClientRequest, ClientResponse, LogEvent, ProcessStatus, get_target_path,
+  get_auth_config, get_target, get_target_path, ClientRequest, ClientResponse, LogEvent,
+  ProcessStatus,
 };
 use crate::{ipvs, GetAuthConfigMode};
 
@@ -415,7 +416,11 @@ impl GlobalState {
     // Create IPVS services for every service in the target.
     for service in &target.services {
       let (host, port) = ipvs::parse_host_and_port(&service.on)?;
-      let key = AppliedIpvsService { name: service.name.clone(), host: host.to_string(), port };
+      let key = AppliedIpvsService {
+        name: service.name.clone(),
+        host: host.to_string(),
+        port,
+      };
       if !clean_services.contains(&key) {
         log_event(LogEvent::CreateIpvsService {
           spec: service.clone(),
@@ -673,7 +678,11 @@ impl GlobalState {
     Ok(())
   }
 
-  fn change_target(&self, synced: &mut TokioMutexGuard<'_, SyncedGlobalState>, new_target: HujingzhiTarget) -> Result<(), Error> {
+  fn change_target(
+    &self,
+    synced: &mut TokioMutexGuard<'_, SyncedGlobalState>,
+    new_target: HujingzhiTarget,
+  ) -> Result<(), Error> {
     // We delete every service that no longer exists.
     // The above code will take care of creating new ones.
     let mut new_services: HashSet<AppliedIpvsService> = HashSet::new();
@@ -695,9 +704,7 @@ impl GlobalState {
           name: applied_service.name.clone(),
           on:   format!("{}:{}", applied_service.host, applied_service.port),
         };
-        log_event(LogEvent::DeleteIpvsService {
-          spec: spec.clone(),
-        });
+        log_event(LogEvent::DeleteIpvsService { spec: spec.clone() });
         if let Err(e) = ipvs::delete_service(&spec) {
           log_event(LogEvent::Warning {
             msg: format!("Failed to delete service: {}", e),
@@ -730,7 +737,7 @@ impl GlobalState {
         let mut synced = self.synced.lock().await;
         let changed = synced.target != target;
         synced.target_text = target_text;
-        self.change_target(&mut synced, target);
+        self.change_target(&mut synced, target)?;
         ClientResponse::Success {
           message: Some(
             match changed {

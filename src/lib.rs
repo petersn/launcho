@@ -5,7 +5,7 @@ pub mod server;
 
 use std::collections::HashMap;
 
-use anyhow::{Error, bail};
+use anyhow::{bail, Context, Error};
 use serde::{Deserialize, Serialize};
 
 use crate::config::{AuthConfig, HujingzhiTarget, ServiceSpec};
@@ -108,17 +108,23 @@ pub fn get_hjz_directory() -> Result<String, Error> {
 }
 
 pub fn guarantee_hjz_directory() -> Result<(), Error> {
-  match std::fs::create_dir(get_hjz_directory()?) {
-    Ok(_) => Ok(()),
-    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
-    Err(e) => Err(e.into()),
+  fn already_exists_ok(result: std::io::Result<()>) -> std::io::Result<()> {
+    match result {
+      Ok(()) => Ok(()),
+      Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+      Err(e) => Err(e),
+    }
   }
+  let hjz_dir = get_hjz_directory()?;
+  already_exists_ok(std::fs::create_dir(&hjz_dir))?;
+  already_exists_ok(std::fs::create_dir(format!("{}/{}", hjz_dir, "storage")))?;
+  Ok(())
 }
 
 pub fn get_auth_config(mode: GetAuthConfigMode) -> Result<AuthConfig, Error> {
   let config_path_suffix = match mode {
-    GetAuthConfigMode::ServerCreateIfNotExists
-    | GetAuthConfigMode::ServerFailIfNotExists => "hjz-server-auth.yaml",
+    GetAuthConfigMode::ServerCreateIfNotExists | GetAuthConfigMode::ServerFailIfNotExists =>
+      "hjz-server-auth.yaml",
     GetAuthConfigMode::Client => "hjz-client-auth.yaml",
   };
   let hjz_dir = get_hjz_directory()?;
@@ -128,7 +134,7 @@ pub fn get_auth_config(mode: GetAuthConfigMode) -> Result<AuthConfig, Error> {
     return Ok(auth_config);
   }
   match mode {
-    GetAuthConfigMode::ServerFailIfNotExists => 
+    GetAuthConfigMode::ServerFailIfNotExists =>
       bail!("Auth info not found at {}\nStart the server to create the auth.", config_path),
     GetAuthConfigMode::Client =>
       bail!("Auth info not found at {}\nOn the server run `hjz print-auth`, and paste the result into a file at {}", config_path, config_path),
@@ -181,7 +187,10 @@ pub async fn send_request(request: ClientRequest) -> Result<ClientResponse, Erro
   let auth_config = get_auth_config(GetAuthConfigMode::Client)?;
   let host = auth_config.host.as_ref().unwrap();
   let (_, port) = ipvs::parse_host_and_port(host)?;
-  let addrs: Vec<_> = host.to_socket_addrs()?.collect();
+  let addrs: Vec<_> = host
+    .to_socket_addrs()
+    .with_context(|| format!("DNS lookup for {} failed", host))?
+    .collect();
   let auth_header = format!(
     "Basic {}",
     general_purpose::STANDARD.encode(format!(":{}", auth_config.token).as_bytes())
@@ -196,8 +205,12 @@ pub async fn send_request(request: ClientRequest) -> Result<ClientResponse, Erro
     .resolve_to_addrs("hujingzhi", &addrs)
     .default_headers(headers)
     .build()?;
-  let response =
-    client.post(format!("https://hujingzhi:{}/api", port)).json(&request).send().await?;
+  let response = client
+    .post(format!("https://hujingzhi:{}/api", port))
+    .json(&request)
+    .send()
+    .await
+    .with_context(|| format!("Request to {} failed", host))?;
   let response = response.text().await?;
   Ok(serde_json::from_str(&response)?)
 }

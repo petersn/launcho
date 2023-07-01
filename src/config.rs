@@ -143,7 +143,7 @@ impl UidOrUsername {
 #[serde(deny_unknown_fields)]
 pub struct ProcessSpec {
   pub name:     String,
-  pub pre:      Option<String>,
+  pub tarball:  Option<String>,
   pub command:  Vec<String>,
   #[serde(default)]
   pub env:      BTreeMap<String, String>,
@@ -157,8 +157,8 @@ pub struct ProcessSpec {
 impl ProcessSpec {
   pub fn apply_secrets(&mut self, secrets: &Secrets) -> Result<(), Error> {
     self.name = secrets.substitute(&self.name)?;
-    if let Some(pre) = &mut self.pre {
-      *pre = secrets.substitute(pre)?;
+    if let Some(tarball) = &mut self.tarball {
+      *tarball = secrets.substitute(tarball)?;
     }
     for command in &mut self.command {
       *command = secrets.substitute(command)?;
