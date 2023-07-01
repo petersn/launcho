@@ -49,6 +49,13 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
   a.ct_eq(b).into()
 }
 
+fn get_unix_time() -> u64 {
+  std::time::SystemTime::now()
+    .duration_since(std::time::UNIX_EPOCH)
+    .unwrap()
+    .as_secs()
+}
+
 fn make_random_word() -> String {
   static ADJECTIVES: &str = include_str!("english-adjectives.txt");
   static NOUNS: &str = include_str!("english-nouns.txt");
@@ -702,9 +709,7 @@ impl GlobalState {
         if let Some(exit_status) = entry.process.try_wait()? {
           update_status!(entry, ProcessStatus::Exited {
             exit_status: exit_status.code().unwrap_or(-1),
-            approx_time: std::time::SystemTime::now()
-              .duration_since(std::time::UNIX_EPOCH)?
-              .as_secs(),
+            approx_time: get_unix_time(),
           });
         }
       }
@@ -885,17 +890,25 @@ impl GlobalState {
         for (process_name, process_set) in &synced.processes_by_name {
           formatted_status.push_str(&format!("{}:\n", process_name));
           for (_, entry) in &process_set.running_versions {
-            let duration = entry.approx_start.elapsed();
+            let duration = match entry.status {
+              ProcessStatus::Exited { approx_time, .. } => {
+                std::time::Duration::from_secs(get_unix_time() - approx_time)
+              }
+              _ => entry.approx_start.elapsed(),
+            };
             formatted_status.push_str(&format!(
-              "  {}: {:?} (run-time: {:?}) (cwd: {:?})",
-              entry.name, entry.status, duration, entry.cwd
+              "  {}: {:?} (run-time: {:.0?})",
+              entry.name, entry.status, duration,
             ));
-            if entry.status == ProcessStatus::Starting
-              && check_rate_limit(&process_name, LAUNCH_RATE_LIMIT)
-                == RateLimitResult::Backoff
-            {
-              formatted_status.push_str(" (too many crashes -- backing off)");
-            }
+            // FIXME: This bit doesn't even make sense, as a process
+            // can't be starting if it's failing to launch.
+            // TODO: Figure out what I want here.
+            // if entry.status == ProcessStatus::Starting
+            //   && check_rate_limit(&process_name, LAUNCH_RATE_LIMIT)
+            //     == RateLimitResult::Backoff
+            // {
+            //   formatted_status.push_str(" (too many crashes -- backing off)");
+            // }
             formatted_status.push_str("\n");
             if !entry.port_allocations.is_empty() {
               formatted_status.push_str("    ports:");
