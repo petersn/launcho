@@ -15,7 +15,7 @@ use warp::Filter;
 use crate::{
   config::{AuthConfig, HujingzhiConfig, HujingzhiTarget, ProcessSpec, Secrets, ServiceSpec},
   get_auth_config, get_target, get_target_path, storage, ClientRequest, ClientResponse, LogEvent,
-  ProcessStatus,
+  ProcessStatus, guarantee_hjz_directory,
 };
 use crate::{ipvs, GetAuthConfigMode};
 
@@ -829,6 +829,8 @@ impl GlobalState {
 }
 
 pub async fn server_main(mut config: HujingzhiConfig) -> Result<(), Error> {
+  guarantee_hjz_directory()?;
+
   let secrets = config.secrets.load()?;
   config.apply_secrets(&secrets)?;
   let (target_text, mut target) = get_target()?;
