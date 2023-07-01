@@ -11,18 +11,15 @@ struct Args {
 
 #[derive(Debug, clap::Subcommand)]
 enum Action {
-  Version,
-  PrintAuth,
   Server {
     #[clap(short, long, value_parser)]
     config: Option<String>,
   },
-  Ping,
-  GetTarget,
-  SetTarget {
-    file: String,
-  },
-  EditTarget,
+  PrintAuth,
+  #[clap(subcommand, alias = "t")]
+  Target(TargetAction),
+  #[clap(subcommand, aliases = &["r", "resources"])]
+  Resource(ResourceAction),
   Status {
     #[clap(long, action)]
     ipvs: bool,
@@ -30,12 +27,21 @@ enum Action {
   Logs {
     process: String,
   },
-  Restart {
+  RestartProcess {
     process: String,
   },
   #[clap(subcommand)]
-  Resource(ResourceAction),
-  ClearLaunchRateLimits,
+  Uncommon(UncommonAction),
+  Version,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum TargetAction {
+  Get,
+  Set {
+    file: String,
+  },
+  Edit,
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -53,6 +59,12 @@ enum ResourceAction {
     ids: Vec<String>,
   },
   Ls,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum UncommonAction {
+  ClearLaunchRateLimits,
+  Ping,
 }
 
 fn handle_error_response(response: ClientResponse) -> ClientResponse {
@@ -127,11 +139,7 @@ async fn main_result() -> Result<(), Error> {
         hujingzhi::server::server_main(server_config).await?
       }
     }
-    Action::Ping => {
-      let pong = hujingzhi::send_request(hujingzhi::ClientRequest::Ping).await?;
-      println!("{:#?}", pong);
-    }
-    Action::GetTarget => {
+    Action::Target(TargetAction::Get) => {
       let response =
         handle_error_response(hujingzhi::send_request(hujingzhi::ClientRequest::GetTarget).await?);
       match response {
@@ -139,7 +147,7 @@ async fn main_result() -> Result<(), Error> {
         _ => panic!("Unexpected response: {:?}", response),
       }
     }
-    Action::SetTarget { file } => {
+    Action::Target(TargetAction::Set { file }) => {
       handle_success_or_error(
         hujingzhi::send_request(hujingzhi::ClientRequest::SetTarget {
           target: std::fs::read_to_string(&file)?,
@@ -147,7 +155,7 @@ async fn main_result() -> Result<(), Error> {
         .await?,
       );
     }
-    Action::EditTarget => {
+    Action::Target(TargetAction::Edit) => {
       let response =
         handle_error_response(hujingzhi::send_request(hujingzhi::ClientRequest::GetTarget).await?);
       let target = match response {
@@ -200,7 +208,7 @@ async fn main_result() -> Result<(), Error> {
         _ => panic!("Unexpected response: {:?}", response),
       }
     }
-    Action::Restart { process } => {
+    Action::RestartProcess { process } => {
       handle_success_or_error(
         hujingzhi::send_request(hujingzhi::ClientRequest::Restart { name: process }).await?,
       );
@@ -247,10 +255,14 @@ async fn main_result() -> Result<(), Error> {
         _ => panic!("Unexpected response: {:?}", response),
       }
     }
-    Action::ClearLaunchRateLimits => {
+    Action::Uncommon(UncommonAction::ClearLaunchRateLimits) => {
       handle_success_or_error(
         hujingzhi::send_request(hujingzhi::ClientRequest::ClearLaunchRateLimits).await?,
       );
+    }
+    Action::Uncommon(UncommonAction::Ping) => {
+      let pong = hujingzhi::send_request(hujingzhi::ClientRequest::Ping).await?;
+      println!("{:#?}", pong);
     }
   })
 }

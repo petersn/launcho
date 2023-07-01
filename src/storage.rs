@@ -8,7 +8,7 @@ pub fn get_storage_dir() -> Result<String, Error> {
   Ok(format!("{}/{}", get_hjz_directory()?, "storage"))
 }
 
-pub fn write_resource(name: String, data: &[u8]) -> Result<(), Error> {
+pub fn write_resource(name: String, data: &[u8]) -> Result<String, Error> {
   let storage_dir = get_storage_dir()?;
   // IDs are the first 128 bits of the SHA256 hash of the contents.
   let mut id = sha256::digest(data);
@@ -19,12 +19,12 @@ pub fn write_resource(name: String, data: &[u8]) -> Result<(), Error> {
   std::fs::write(
     metadata_path,
     serde_json::to_string(&ResourceListEntry {
-      id,
+      id:   id.clone(),
       name,
       size: data.len() as u64,
     })?,
   )?;
-  Ok(())
+  Ok(id)
 }
 
 pub fn read_resource(id: &str) -> Result<Vec<u8>, Error> {

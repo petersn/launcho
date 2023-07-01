@@ -967,8 +967,8 @@ impl GlobalState {
         }
       }
       ClientRequest::UploadResource { name, data } => {
-        storage::write_resource(name, &data)?;
-        ClientResponse::Success { message: None }
+        let id = storage::write_resource(name, &data)?;
+        ClientResponse::Success { message: Some(id) }
       }
       ClientRequest::DownloadResource { id } => match storage::read_resource(&id) {
         Ok(data) => ClientResponse::Resource { id, data },
