@@ -5,7 +5,7 @@ use std::{
   sync::{atomic, Arc, Mutex},
 };
 
-use anyhow::{anyhow, bail, Error};
+use anyhow::{anyhow, bail, Error, Context};
 use tokio::{
   io::AsyncRead,
   process::{ChildStderr, ChildStdout},
@@ -393,16 +393,16 @@ impl GlobalState {
       port_allocations.insert(service_name.clone(), port);
     }
 
-    let mut process = tokio::process::Command::new(&process_spec.command[0]);
+    let mut command = tokio::process::Command::new(&process_spec.command[0]);
     let cwd = match &process_spec.cwd {
       Some(cwd) => PathBuf::from(cwd),
       None => {
         let temp_dir = tempfile::tempdir()?;
-        process.current_dir(temp_dir.path());
+        command.current_dir(temp_dir.path());
         temp_dir.path().to_owned()
       }
     };
-    process.current_dir(&cwd);
+    command.current_dir(&cwd);
     // Unpack requested resources.
     for resource_request in &process_spec.resources {
       let target = cwd.join(&resource_request.file);
@@ -430,22 +430,27 @@ impl GlobalState {
     }
     println!("\x1b[92m[I]\x1b[0m Launching process2: {:?}", process_spec.command);
     if let Some(uid) = &process_spec.uid {
-      process.uid(uid.to_uid()?);
+      command.uid(uid.to_uid()?);
     }
     if let Some(gid) = &process_spec.gid {
-      process.gid(gid.to_uid()?);
+      command.gid(gid.to_uid()?);
     }
-    process.args(&process_spec.command[1..]);
+    command.args(&process_spec.command[1..]);
     for (key, value) in &process_spec.env {
-      process.env(key, value);
+      command.env(key, value);
     }
     for (service_name, port) in &port_allocations {
-      process.env(&format!("SERVICE_PORT_{}", service_name.to_uppercase()), port.to_string());
+      command.env(&format!("SERVICE_PORT_{}", service_name.to_uppercase()), port.to_string());
     }
-    process.stdin(Stdio::null());
-    process.stdout(Stdio::piped());
-    process.stderr(Stdio::piped());
-    let process = process.spawn()?;
+    command.stdin(Stdio::null());
+    command.stdout(Stdio::piped());
+    command.stderr(Stdio::piped());
+    let process = command.spawn().with_context(|| {
+      format!(
+        "Failed to launch process {:?}",
+        process_spec.command
+      )
+    })?;
     let entry = RunningProcessEntry::new(process, cwd, port_allocations.clone());
     log_event(LogEvent::LaunchProcess {
       name: entry.name.clone(),
