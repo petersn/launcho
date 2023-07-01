@@ -20,9 +20,9 @@ enum Action {
   Ping,
   GetTarget,
   SetTarget {
-    #[clap(short, long, value_parser, default_value = "hjz-target.yaml")]
-    target: String,
+    file: String,
   },
+  EditTarget,
   Status {
     #[clap(long, action)]
     ipvs: bool,
@@ -34,13 +34,13 @@ enum Action {
     process: String,
   },
   Upload {
-    path: String,
+    file: String,
     #[clap(short, long)]
     name: Option<String>,
   },
   Download {
     id:   String,
-    path: String,
+    file: String,
   },
   DeleteResources {
     ids: Vec<String>,
@@ -55,6 +55,17 @@ fn handle_error_response(response: ClientResponse) -> ClientResponse {
       std::process::exit(1);
     }
     _ => response,
+  }
+}
+
+fn handle_success_or_error(response: ClientResponse) {
+  let response = handle_error_response(response);
+  match &response {
+    ClientResponse::Success { message: None } => println!("Success"),
+    ClientResponse::Success {
+      message: Some(message),
+    } => println!("Success: {}", message),
+    _ => panic!("Unexpected response: {:?}", response),
   }
 }
 
@@ -121,20 +132,31 @@ async fn main_result() -> Result<(), Error> {
         _ => panic!("Unexpected response: {:?}", response),
       }
     }
-    Action::SetTarget { target } => {
-      let target_text = std::fs::read_to_string(&target)?;
-      let response = handle_error_response(
+    Action::SetTarget { file } => {
+      handle_success_or_error(
         hujingzhi::send_request(hujingzhi::ClientRequest::SetTarget {
-          target: target_text,
+          target: std::fs::read_to_string(&file)?,
         })
         .await?,
       );
-      match response {
-        ClientResponse::Success { message: None } => println!("Success"),
-        ClientResponse::Success {
-          message: Some(message),
-        } => println!("{}", message),
+    }
+    Action::EditTarget => {
+      let response =
+        handle_error_response(hujingzhi::send_request(hujingzhi::ClientRequest::GetTarget).await?);
+      let target = match response {
+        ClientResponse::Target { target } => target,
         _ => panic!("Unexpected response: {:?}", response),
+      };
+      let new_target = edit::edit(&target)?;
+      if new_target == target {
+        println!("No changes -- not updating");
+      } else {
+        handle_success_or_error(
+          hujingzhi::send_request(hujingzhi::ClientRequest::SetTarget {
+            target: new_target,
+          })
+          .await?,
+        );
       }
     }
     Action::Status { ipvs } => {
@@ -172,43 +194,27 @@ async fn main_result() -> Result<(), Error> {
       }
     }
     Action::Restart { process } => {
-      let response = handle_error_response(
+      handle_success_or_error(
         hujingzhi::send_request(hujingzhi::ClientRequest::Restart { name: process }).await?,
       );
-      match response {
-        ClientResponse::Success { message: None } => println!("Success"),
-        ClientResponse::Success {
-          message: Some(message),
-        } => println!("Success: {}", message),
-        ClientResponse::Error { message } => println!("Error: {}", message),
-        _ => panic!("Unexpected response: {:?}", response),
-      }
     }
-    Action::Upload { name, path } => {
-      let data = std::fs::read(&path)?;
-      let response = handle_error_response(
+    Action::Upload { name, file } => {
+      let data = std::fs::read(&file)?;
+      handle_success_or_error(
         hujingzhi::send_request(hujingzhi::ClientRequest::UploadResource {
-          name: name.unwrap_or(path),
+          name: name.unwrap_or(file),
           data,
         })
         .await?,
       );
-      match response {
-        ClientResponse::Success { message: None } => println!("Success"),
-        ClientResponse::Success {
-          message: Some(message),
-        } => println!("Success: {}", message),
-        ClientResponse::Error { message } => println!("Error: {}", message),
-        _ => panic!("Unexpected response: {:?}", response),
-      }
     }
-    Action::Download { id, path } => {
+    Action::Download { id, file } => {
       let response = handle_error_response(
         hujingzhi::send_request(hujingzhi::ClientRequest::DownloadResource { id }).await?,
       );
       match response {
         ClientResponse::Resource { id: _, data } => {
-          std::fs::write(&path, data)?;
+          std::fs::write(&file, data)?;
           println!("Success");
         }
         ClientResponse::Error { message } => println!("Error: {}", message),
@@ -216,17 +222,9 @@ async fn main_result() -> Result<(), Error> {
       }
     }
     Action::DeleteResources { ids } => {
-      let response = handle_error_response(
+      handle_success_or_error(
         hujingzhi::send_request(hujingzhi::ClientRequest::DeleteResources { ids }).await?,
       );
-      match response {
-        ClientResponse::Success { message: None } => println!("Success"),
-        ClientResponse::Success {
-          message: Some(message),
-        } => println!("Success: {}", message),
-        ClientResponse::Error { message } => println!("Error: {}", message),
-        _ => panic!("Unexpected response: {:?}", response),
-      }
     }
     Action::ListResources => {
       let response = handle_error_response(

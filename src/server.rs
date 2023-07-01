@@ -410,7 +410,7 @@ impl GlobalState {
       None => {
         // FIXME: Clean this stuff up.
         crate::already_exists_ok(std::fs::create_dir(&"/tmp/hjz-procs"))?;
-        let nonce: u128 = rand::random();
+        let nonce: u64 = rand::random();
         let path = format!("/tmp/hjz-procs/tmp-{:x}", nonce);
         crate::already_exists_ok(std::fs::create_dir(&path))?;
         command.current_dir(&path);
@@ -897,11 +897,13 @@ impl GlobalState {
               formatted_status.push_str(" (too many crashes -- backing off)");
             }
             formatted_status.push_str("\n");
-            formatted_status.push_str("    ports:");
-            for (service_name, port) in &entry.port_allocations {
-              formatted_status.push_str(&format!(" {}:{}", service_name, port));
+            if !entry.port_allocations.is_empty() {
+              formatted_status.push_str("    ports:");
+              for (service_name, port) in &entry.port_allocations {
+                formatted_status.push_str(&format!(" {}:{}", service_name, port));
+              }
+              formatted_status.push_str("\n");
             }
-            formatted_status.push_str("\n");
           }
         }
         ClientResponse::Status {

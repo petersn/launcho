@@ -8,6 +8,7 @@ anyhow = "1.0.71"
 base64 = "0.21.2"
 clap = { version = "4.3.4", features = [ "derive" ] }
 dotenv = "0.15.0"
+edit = "0.1.4"
 env_logger = "0.10.0"
 futures-util = "0.3.28"
 libc = "0.2.147"
