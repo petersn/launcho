@@ -808,7 +808,7 @@ impl GlobalState {
       }
       ClientRequest::DownloadTarball { id } => match storage::read_tarball(&id) {
         Ok(data) => ClientResponse::Tarball { id, data },
-        Err(message) => ClientResponse::Error { message },
+        Err(message) => ClientResponse::Error { message: message.to_string() },
       },
       ClientRequest::DeleteTarballs { ids } => {
         let errors =
@@ -821,7 +821,7 @@ impl GlobalState {
           }
         }
       }
-      ClientRequest::ListTarballs => ClientResponse::Tarballs {
+      ClientRequest::ListTarballs => ClientResponse::TarballList {
         tarballs: storage::list_tarballs()?,
       },
     })
