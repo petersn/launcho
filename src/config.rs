@@ -159,11 +159,13 @@ impl ResourceRequest {
 pub struct ProcessSpec {
   pub name:      String,
   pub cwd:       Option<String>,
+  #[serde(default)]
   pub resources: Vec<ResourceRequest>,
   pub before:    Option<String>,
   pub command:   Vec<String>,
   #[serde(default)]
   pub env:       BTreeMap<String, String>,
+  #[serde(default)]
   pub receives:  Vec<String>,
   pub health:    Option<HealthCheckSpec>,
   pub uid:       Option<UidOrUsername>,
