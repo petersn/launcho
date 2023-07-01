@@ -33,19 +33,26 @@ enum Action {
   Restart {
     process: String,
   },
-  Upload {
+  #[clap(subcommand)]
+  Resource(ResourceAction),
+  ClearLaunchRateLimits,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum ResourceAction {
+  Up {
     file: String,
     #[clap(short, long)]
     name: Option<String>,
   },
-  Download {
+  Down {
     id:   String,
     file: String,
   },
-  DeleteResources {
+  Rm {
     ids: Vec<String>,
   },
-  ListResources,
+  Ls,
 }
 
 fn handle_error_response(response: ClientResponse) -> ClientResponse {
@@ -198,7 +205,7 @@ async fn main_result() -> Result<(), Error> {
         hujingzhi::send_request(hujingzhi::ClientRequest::Restart { name: process }).await?,
       );
     }
-    Action::Upload { name, file } => {
+    Action::Resource(ResourceAction::Up { name, file }) => {
       let data = std::fs::read(&file)?;
       handle_success_or_error(
         hujingzhi::send_request(hujingzhi::ClientRequest::UploadResource {
@@ -208,7 +215,7 @@ async fn main_result() -> Result<(), Error> {
         .await?,
       );
     }
-    Action::Download { id, file } => {
+    Action::Resource(ResourceAction::Down { id, file }) => {
       let response = handle_error_response(
         hujingzhi::send_request(hujingzhi::ClientRequest::DownloadResource { id }).await?,
       );
@@ -221,12 +228,12 @@ async fn main_result() -> Result<(), Error> {
         _ => panic!("Unexpected response: {:?}", response),
       }
     }
-    Action::DeleteResources { ids } => {
+    Action::Resource(ResourceAction::Rm { ids }) => {
       handle_success_or_error(
         hujingzhi::send_request(hujingzhi::ClientRequest::DeleteResources { ids }).await?,
       );
     }
-    Action::ListResources => {
+    Action::Resource(ResourceAction::Ls) => {
       let response = handle_error_response(
         hujingzhi::send_request(hujingzhi::ClientRequest::ListResources).await?,
       );
@@ -239,6 +246,11 @@ async fn main_result() -> Result<(), Error> {
         }
         _ => panic!("Unexpected response: {:?}", response),
       }
+    }
+    Action::ClearLaunchRateLimits => {
+      handle_success_or_error(
+        hujingzhi::send_request(hujingzhi::ClientRequest::ClearLaunchRateLimits).await?,
+      );
     }
   })
 }

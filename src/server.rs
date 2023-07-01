@@ -135,21 +135,6 @@ pub fn get_entire_log() -> Vec<LogEvent> {
   LOG_EVENTS.lock().unwrap().iter().cloned().collect()
 }
 
-static RATE_LIMITING: Mutex<Option<HashMap<String, Vec<std::time::Instant>>>> = Mutex::new(None);
-
-macro_rules! get_rate_limiting {
-  ($map:ident) => {
-    let mut map_guard = RATE_LIMITING.lock().unwrap();
-    let $map = match map_guard.as_mut() {
-      Some(map) => map,
-      None => {
-        *map_guard = Some(HashMap::new());
-        map_guard.as_mut().unwrap()
-      }
-    };
-  };
-}
-
 #[derive(PartialEq, Eq)]
 pub enum RateLimitResult {
   Success,
@@ -171,6 +156,21 @@ pub struct RateLimit {
   duration:         std::time::Duration,
   backoff_duration: std::time::Duration,
   max_attempts:     usize,
+}
+
+static RATE_LIMITING: Mutex<Option<HashMap<String, Vec<std::time::Instant>>>> = Mutex::new(None);
+
+macro_rules! get_rate_limiting {
+  ($map:ident) => {
+    let mut map_guard = RATE_LIMITING.lock().unwrap();
+    let $map = match map_guard.as_mut() {
+      Some(map) => map,
+      None => {
+        *map_guard = Some(HashMap::new());
+        map_guard.as_mut().unwrap()
+      }
+    };
+  };
 }
 
 // NB: count must always have the same value for a particular key.
@@ -203,6 +203,11 @@ pub fn rate_limit_event(key: &str, rate_limit: &RateLimit) {
   while occurrences.len() > rate_limit.max_attempts {
     occurrences.remove(0);
   }
+}
+
+fn clear_launch_rate_limits() {
+  get_rate_limiting!(map);
+  map.retain(|k, _| !k.starts_with("launch:"));
 }
 
 struct SpooledOutput {
@@ -251,7 +256,7 @@ struct RunningProcessEntry {
   approx_conn_count: i32,
   process:           tokio::process::Child,
   name:              String,
-  cwd:               PathBuf,
+  _cwd:               PathBuf,
   /// Maps service name to port number.
   port_allocations:  HashMap<String, u16>,
   output:            Arc<SpooledOutput>,
@@ -273,7 +278,7 @@ impl RunningProcessEntry {
       approx_conn_count: 0,
       process,
       name,
-      cwd,
+      _cwd: cwd,
       port_allocations,
       output: SpooledOutput::new(stdout, stderr),
     }
@@ -817,6 +822,7 @@ impl GlobalState {
   fn change_target(
     &self,
     synced: &mut TokioMutexGuard<'_, SyncedGlobalState>,
+    new_target_text: String,
     new_target: HujingzhiTarget,
   ) -> Result<(), Error> {
     // We delete every service that no longer exists.
@@ -850,6 +856,10 @@ impl GlobalState {
       }
     });
 
+    // Clear all launch-related rate limits.
+    clear_launch_rate_limits();
+
+    synced.target_text = new_target_text;
     synced.target = new_target;
     Ok(())
   }
@@ -872,8 +882,9 @@ impl GlobalState {
         std::fs::write(get_target_path()?, &target_text)?;
         let mut synced = self.synced.lock().await;
         let changed = synced.target != target;
-        synced.target_text = target_text;
-        self.change_target(&mut synced, target)?;
+        if changed {
+          self.change_target(&mut synced, target_text, target)?;
+        }
         ClientResponse::Success {
           message: Some(
             match changed {
@@ -979,6 +990,10 @@ impl GlobalState {
       ClientRequest::ListResources => ClientResponse::ResourceList {
         resources: storage::list_resources()?,
       },
+      ClientRequest::ClearLaunchRateLimits => {
+        clear_launch_rate_limits();
+        ClientResponse::Success { message: None }
+      }
     })
   }
 }

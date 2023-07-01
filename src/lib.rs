@@ -83,6 +83,7 @@ pub enum ClientRequest {
   DownloadResource { id: String },
   DeleteResources { ids: Vec<String> },
   ListResources,
+  ClearLaunchRateLimits,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
