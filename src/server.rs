@@ -425,8 +425,21 @@ impl GlobalState {
     }
     // Perform the optional before command.
     if let Some(before) = &process_spec.before {
-      let output = std::process::Command::new("sh").arg("-c").arg(before).output();
-      match output {
+      let mut before_command = std::process::Command::new("sh");
+      before_command.arg("-c").arg(before).current_dir(&cwd);
+      if let Some(uid) = &process_spec.uid {
+        command.uid(uid.to_uid()?);
+      }
+      if let Some(gid) = &process_spec.gid {
+        command.gid(gid.to_uid()?);
+      }
+      for (key, value) in &process_spec.env {
+        command.env(key, value);
+      }
+      for (service_name, port) in &port_allocations {
+        command.env(&format!("SERVICE_PORT_{}", service_name.to_uppercase()), port.to_string());
+      }
+      match before_command.output() {
         Ok(output) =>
           if !output.status.success() {
             log_event(LogEvent::Error {
@@ -442,6 +455,7 @@ impl GlobalState {
         }
       }
     }
+    // FIXME: Maybe deduplicate this against the above.
     if let Some(uid) = &process_spec.uid {
       command.uid(uid.to_uid()?);
     }
