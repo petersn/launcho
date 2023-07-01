@@ -381,7 +381,8 @@ impl GlobalState {
           log_event(LogEvent::Error {
             msg: format!("Failed to allocate ports when launching process: {}", e),
           });
-          // Avoid leaking ports.
+          // FIXME: There are many other paths along which I leak ports, not just this one!
+          // I should avoid leaking ports in all of them.
           for port in port_allocations.values() {
             release_port(free_loopback_ports, allocated_ports, *port);
           }
@@ -392,7 +393,6 @@ impl GlobalState {
       port_allocations.insert(service_name.clone(), port);
     }
 
-    //let executable_path = std::fs::canonicalize(&process_spec.command[0])?;
     let mut process = tokio::process::Command::new(&process_spec.command[0]);
     let cwd = match &process_spec.cwd {
       Some(cwd) => PathBuf::from(cwd),
@@ -408,6 +408,7 @@ impl GlobalState {
       let target = cwd.join(&resource_request.file);
       storage::copy_resource(&resource_request.id, &target)?;
     }
+    println!("\x1b[92m[I]\x1b[0m Launching process: {:?}", process_spec.command);
     // Perform the optional before command.
     if let Some(before) = &process_spec.before {
       let output = std::process::Command::new("sh").arg("-c").arg(before).output();
@@ -427,6 +428,7 @@ impl GlobalState {
         }
       }
     }
+    println!("\x1b[92m[I]\x1b[0m Launching process2: {:?}", process_spec.command);
     if let Some(uid) = &process_spec.uid {
       process.uid(uid.to_uid()?);
     }
