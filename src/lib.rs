@@ -2,6 +2,8 @@ pub mod config;
 pub mod ipvs;
 #[cfg(target_os = "linux")]
 pub mod server;
+#[cfg(target_os = "linux")]
+pub mod storage;
 
 use std::collections::HashMap;
 
@@ -61,6 +63,13 @@ pub enum LogEvent {
   },
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TarballListEntry {
+  pub id:   String,
+  pub name: String,
+  pub size: u64,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum ClientRequest {
@@ -70,6 +79,10 @@ pub enum ClientRequest {
   Status,
   GetLogs { name: String },
   Restart { name: String },
+  UploadTarball { name: String, data: Vec<u8> },
+  DownloadTarball { id: String },
+  DeleteTarballs { ids: Vec<String> },
+  ListTarballs,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -93,6 +106,13 @@ pub enum ClientResponse {
   Logs {
     name:   String,
     output: String,
+  },
+  Tarball {
+    id:   String,
+    data: Vec<u8>,
+  },
+  TarballList {
+    tarballs: Vec<TarballListEntry>,
   },
 }
 

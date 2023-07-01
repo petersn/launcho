@@ -14,7 +14,7 @@ use warp::Filter;
 
 use crate::{
   config::{AuthConfig, HujingzhiConfig, HujingzhiTarget, ProcessSpec, Secrets, ServiceSpec},
-  get_auth_config, get_target, get_target_path, ClientRequest, ClientResponse, LogEvent,
+  get_auth_config, get_target, get_target_path, storage, ClientRequest, ClientResponse, LogEvent,
   ProcessStatus,
 };
 use crate::{ipvs, GetAuthConfigMode};
@@ -802,6 +802,28 @@ impl GlobalState {
           Err(message) => ClientResponse::Error { message },
         }
       }
+      ClientRequest::UploadTarball { name, data } => {
+        storage::write_tarball(name, &data)?;
+        ClientResponse::Success { message: None }
+      }
+      ClientRequest::DownloadTarball { id } => match storage::read_tarball(&id) {
+        Ok(data) => ClientResponse::Tarball { id, data },
+        Err(message) => ClientResponse::Error { message },
+      },
+      ClientRequest::DeleteTarballs { ids } => {
+        let errors =
+          ids.iter().filter_map(|id| storage::delete_tarball(id).err()).collect::<Vec<_>>();
+        if errors.is_empty() {
+          ClientResponse::Success { message: None }
+        } else {
+          ClientResponse::Error {
+            message: format!("Failed to delete tarballs: {:?}", errors),
+          }
+        }
+      }
+      ClientRequest::ListTarballs => ClientResponse::Tarballs {
+        tarballs: storage::list_tarballs()?,
+      },
     })
   }
 }
