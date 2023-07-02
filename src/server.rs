@@ -1071,6 +1071,7 @@ Authorization: Basic <base64 of "any username:server token">
     .and(warp::body::bytes())
     .and(warp::query::<HashMap<String, String>>())
     .then(|(), _: &'static GlobalState, bytes: bytes::Bytes, query: HashMap<String, String>| async move {
+      println!("Upload: {:?} -- Bytes: {}", query, bytes.len());
       fn handle_upload(bytes: bytes::Bytes, query: HashMap<String, String>) -> Result<ClientResponse, Error> {
         let name = query.get("name").ok_or_else(|| anyhow!("Missing name query parameter"))?;
         let id = storage::write_resource(name.clone(), &bytes)?;
