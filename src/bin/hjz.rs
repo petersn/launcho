@@ -1,5 +1,8 @@
+use std::io::Write;
+
 use anyhow::{bail, Context, Error};
 use clap::Parser;
+use futures::TryStreamExt;
 use hujingzhi::{
   get_config_path, guarantee_hjz_directory, make_authenticated_client, ClientResponse,
   GetAuthConfigMode,
@@ -223,7 +226,6 @@ async fn main_result() -> Result<(), Error> {
       );
     }
     Action::Resource(ResourceAction::Up { name, file }) => {
-      use futures::TryStreamExt;
       let full_size = std::fs::metadata(&file)?.len();
       let mut bytes_written = 0;
       let reader =
@@ -247,9 +249,6 @@ async fn main_result() -> Result<(), Error> {
       handle_success_or_error(serde_json::from_str(&response)?);
     }
     Action::Resource(ResourceAction::Down { id, file }) => {
-      use std::io::Write;
-
-      use futures::TryStreamExt;
       let (client, host, port) = make_authenticated_client()?;
       let response = client
         .get(format!("https://hujingzhi:{}/download", port))
