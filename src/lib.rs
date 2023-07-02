@@ -53,13 +53,16 @@ pub enum LogEvent {
     name:   String,
     status: ProcessStatus,
   },
+  Kill {
+    name: String,
+  },
+  ForceRestart {
+    name: String,
+  },
   WeightChange {
     service: String,
     port:    u16,
     weight:  i32,
-  },
-  ForceRestart {
-    name: String,
   },
 }
 

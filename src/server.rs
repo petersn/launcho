@@ -575,8 +575,15 @@ impl GlobalState {
       let target_spec = specs.get(process_name.as_str());
       let most_recent_version = process_set.running_versions.last();
       match (target_spec, most_recent_version) {
-        // If we have no target spec then we won't launch anything.
-        (None, _) => {}
+        // If we have no target spec then we should kill all running versions.
+        (None, _) => {
+          for (_, version) in &mut process_set.running_versions {
+            log_event(LogEvent::Kill {
+              name: version.name.clone(),
+            });
+            version.process.kill().await.ok();
+          }
+        }
         // If we have an up-to-date version that's either starting or running then we won't launch anything.
         (
           Some(target_spec),
