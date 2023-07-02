@@ -5,7 +5,7 @@ use std::{
   sync::{atomic, Arc, Mutex},
 };
 
-use anyhow::{anyhow, bail, Error, Context};
+use anyhow::{anyhow, bail, Context, Error};
 use tokio::{
   io::AsyncRead,
   process::{ChildStderr, ChildStdout},
@@ -50,10 +50,7 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 }
 
 fn get_unix_time() -> u64 {
-  std::time::SystemTime::now()
-    .duration_since(std::time::UNIX_EPOCH)
-    .unwrap()
-    .as_secs()
+  std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()
 }
 
 fn make_random_word() -> String {
@@ -256,7 +253,7 @@ struct RunningProcessEntry {
   approx_conn_count: i32,
   process:           tokio::process::Child,
   name:              String,
-  _cwd:               PathBuf,
+  _cwd:              PathBuf,
   /// Maps service name to port number.
   port_allocations:  HashMap<String, u16>,
   output:            Arc<SpooledOutput>,
@@ -485,12 +482,9 @@ impl GlobalState {
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
     // FIXME: I should try to find a way to distinguish between the binary and cwd not being found.
-    let process = command.spawn().with_context(|| {
-      format!(
-        "Failed to launch process {:?}",
-        process_spec.command
-      )
-    })?;
+    let process = command
+      .spawn()
+      .with_context(|| format!("Failed to launch process {:?}", process_spec.command))?;
     let entry = RunningProcessEntry::new(process, cwd, port_allocations.clone());
     log_event(LogEvent::LaunchProcess {
       name: entry.name.clone(),
@@ -902,9 +896,8 @@ impl GlobalState {
           formatted_status.push_str(&format!("{}:\n", process_name));
           for (_, entry) in &process_set.running_versions {
             let duration = match entry.status {
-              ProcessStatus::Exited { approx_time, .. } => {
-                std::time::Duration::from_secs(get_unix_time() - approx_time)
-              }
+              ProcessStatus::Exited { approx_time, .. } =>
+                std::time::Duration::from_secs(get_unix_time() - approx_time),
               _ => entry.approx_start.elapsed(),
             };
             formatted_status.push_str(&format!(
@@ -966,16 +959,6 @@ impl GlobalState {
           Err(message) => ClientResponse::Error { message },
         }
       }
-      ClientRequest::UploadResource { name, data } => {
-        let id = storage::write_resource(name, &data)?;
-        ClientResponse::Success { message: Some(id) }
-      }
-      ClientRequest::DownloadResource { id } => match storage::read_resource(&id) {
-        Ok(data) => ClientResponse::Resource { id, data },
-        Err(message) => ClientResponse::Error {
-          message: message.to_string(),
-        },
-      },
       ClientRequest::DeleteResources { ids } => {
         let errors =
           ids.iter().filter_map(|id| storage::delete_resource(id).err()).collect::<Vec<_>>();
@@ -1042,40 +1025,84 @@ pub async fn server_main(mut config: HujingzhiConfig) -> Result<(), Error> {
       false => Err("Wrong token"),
     }
   };
+  let validate_auth = move |auth_header: Option<String>| async move {
+    match auth_header.unwrap_or_default().strip_prefix("Basic ") {
+      Some(basic) => match check_basic_auth(basic) {
+        Ok(()) => Ok(()),
+        Err(e) =>
+          Err(warp::reject::custom(MessageAndStatus(e, warp::http::StatusCode::UNAUTHORIZED))),
+      },
+      None => Err(warp::reject::custom(MessageAndStatus(
+        r#"Authorization header is required, like:
 
-  let api_endpoint = warp::path!("api")
-    .and(warp::header::optional::<String>("authorization"))
-    .and_then(move |auth_header: Option<String>| async move {
-      match auth_header.unwrap_or_default().strip_prefix("Basic ") {
-        Some(basic) => match check_basic_auth(basic) {
-          Ok(()) => Ok(()),
-          Err(e) =>
-            Err(warp::reject::custom(MessageAndStatus(e, warp::http::StatusCode::UNAUTHORIZED))),
-        },
-        None => Err(warp::reject::custom(MessageAndStatus(
-          r#"Authorization header is required, like:
-
-  Authorization: Basic <base64 of "any username:server token">
+Authorization: Basic <base64 of "any username:server token">
 "#,
-          warp::http::StatusCode::UNAUTHORIZED,
-        ))),
+        warp::http::StatusCode::UNAUTHORIZED,
+      ))),
+    }
+  };
+
+  fn make_response(r: Result<ClientResponse, Error>) -> impl warp::Reply {
+    match r {
+      Ok(response) => warp::reply::json(&response),
+      Err(e) => {
+        eprintln!("Error: {}", e);
+        warp::reply::json(&ClientResponse::Error {
+          message: format!("{}", e),
+        })
       }
-    })
-    .and(warp_global_state.clone())
-    .and(warp::body::json())
-    .then(|(), global_state: &'static GlobalState, request: ClientRequest| async move {
-      match global_state.handle_request(request).await {
-        Ok(response) => warp::reply::json(&response),
-        Err(e) => {
-          eprintln!("Error: {}", e);
-          warp::reply::json(&ClientResponse::Error {
-            message: format!("{}", e),
-          })
-        }
+    }
+  }
+
+  let check_auth = warp::header::optional::<String>("authorization")
+    .and_then(validate_auth)
+    .and(warp_global_state.clone());
+
+  let api_endpoint = check_auth.and(warp::path!("api")).and(warp::body::json()).then(
+    |(), global_state: &'static GlobalState, request: ClientRequest| async move {
+      make_response(global_state.handle_request(request).await)
+    },
+  );
+
+  // FIXME: Don't spool the file, stream to disk.
+  let upload_endpoint = check_auth
+    .and(warp::path!("upload"))
+    .and(warp::body::content_length_limit(1024 * 1024 * 1024))
+    .and(warp::body::bytes())
+    .and(warp::query::<HashMap<String, String>>())
+    .then(|(), _: &'static GlobalState, bytes: bytes::Bytes, query: HashMap<String, String>| async move {
+      fn handle_upload(bytes: bytes::Bytes, query: HashMap<String, String>) -> Result<ClientResponse, Error> {
+        let name = query.get("name").ok_or_else(|| anyhow!("Missing name query parameter"))?;
+        let id = storage::write_resource(name.clone(), &bytes)?;
+        Ok(ClientResponse::Success { message: Some(id) })
       }
+      make_response(handle_upload(bytes, query))
+    });
+
+  // FIXME: Don't slurp the file, stream from disk.
+  let download_endpoint = check_auth
+    .and(warp::path!("download"))
+    .and(warp::query::<HashMap<String, String>>())
+    .then(|(), _: &'static GlobalState, query: HashMap<String, String>| async move {
+      fn handle_download(query: HashMap<String, String>) -> Result<Vec<u8>, Error> {
+        let id = query.get("id").ok_or_else(|| anyhow!("Missing id query parameter"))?;
+        Ok(storage::read_resource(id)?)
+      }
+      let builder = warp::http::Response::builder();
+      match handle_download(query) {
+        Ok(data) => builder
+          .header("Content-Type", "application/octet-stream")
+          .header("Content-Length", data.len())
+          .body(data),
+        Err(e) =>
+          builder.status(warp::http::StatusCode::BAD_REQUEST).body(format!("{}", e).into_bytes()),
+      }
+      .unwrap()
     });
 
   let all_endpoints = api_endpoint
+    .or(upload_endpoint)
+    .or(download_endpoint)
     // Map rejections to a response.
     .recover(|e: warp::Rejection| async move {
       if let Some(MessageAndStatus(msg, status)) = e.find() {

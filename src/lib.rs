@@ -79,8 +79,6 @@ pub enum ClientRequest {
   Status,
   GetLogs { name: String },
   Restart { name: String },
-  UploadResource { name: String, data: Vec<u8> },
-  DownloadResource { id: String },
   DeleteResources { ids: Vec<String> },
   ListResources,
   ClearLaunchRateLimits,
@@ -200,7 +198,7 @@ pub fn get_target() -> Result<(String, HujingzhiTarget), Error> {
   Ok((target_text, target))
 }
 
-pub async fn send_request(request: ClientRequest) -> Result<ClientResponse, Error> {
+pub fn make_authenticated_client() -> Result<(reqwest::Client, String, u16), Error> {
   use std::net::ToSocketAddrs;
 
   use base64::{engine::general_purpose, Engine};
@@ -227,6 +225,11 @@ pub async fn send_request(request: ClientRequest) -> Result<ClientResponse, Erro
     .resolve_to_addrs("hujingzhi", &addrs)
     .default_headers(headers)
     .build()?;
+  Ok((client, host.to_string(), port))
+}
+
+pub async fn send_request(request: ClientRequest) -> Result<ClientResponse, Error> {
+  let (client, host, port) = make_authenticated_client()?;
   let response = client
     .post(format!("https://hujingzhi:{}/api", port))
     .json(&request)

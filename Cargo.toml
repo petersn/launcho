@@ -6,15 +6,17 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.71"
 base64 = "0.21.2"
+bytes = "1.4.0"
 clap = { version = "4.3.4", features = [ "derive" ] }
 dotenv = "0.15.0"
 edit = "0.1.4"
 env_logger = "0.10.0"
+futures = "0.3.28"
 futures-util = "0.3.28"
 libc = "0.2.147"
 rand = "0.8.5"
 rcgen = "0.11.0"
-reqwest = { version = "0.11.18", features = [ "json" ] }
+reqwest = { version = "0.11.18", features = [ "json", "stream" ] }
 serde = { version = "1.0.164", features = [ "derive" ] }
 serde_json = "1.0.96"
 serde_with = "3.0.0"
@@ -22,5 +24,6 @@ serde_yaml = "0.9.21"
 sha256 = "1.1.4"
 subtle = "2.5.0"
 tokio = { version = "1.28.2", features = [ "full" ] }
+tokio-util = "0.7.8"
 users = "0.11.0"
 warp = { version = "0.3.5", features = [ "tls" ] }

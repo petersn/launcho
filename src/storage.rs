@@ -10,16 +10,16 @@ pub fn get_storage_dir() -> Result<String, Error> {
 
 pub fn write_resource(name: String, data: &[u8]) -> Result<String, Error> {
   let storage_dir = get_storage_dir()?;
-  // IDs are the first 128 bits of the SHA256 hash of the contents.
+  // IDs are the first 160 bits of the SHA256 hash of the contents.
   let mut id = sha256::digest(data);
-  id.truncate(32);
+  id.truncate(40);
   let resource_path = format!("{}/{}-data", storage_dir, id);
   let metadata_path = format!("{}/{}-metadata", storage_dir, id);
   std::fs::write(resource_path, data)?;
   std::fs::write(
     metadata_path,
     serde_json::to_string(&ResourceListEntry {
-      id:   id.clone(),
+      id: id.clone(),
       name,
       size: data.len() as u64,
     })?,

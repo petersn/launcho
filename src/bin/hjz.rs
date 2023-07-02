@@ -1,6 +1,9 @@
-use anyhow::{bail, Error};
+use anyhow::{bail, Context, Error};
 use clap::Parser;
-use hujingzhi::{get_config_path, guarantee_hjz_directory, ClientResponse, GetAuthConfigMode};
+use hujingzhi::{
+  get_config_path, guarantee_hjz_directory, make_authenticated_client, ClientResponse,
+  GetAuthConfigMode,
+};
 
 #[derive(Debug, Parser)]
 #[clap(author, version, about, long_about = None)]
@@ -38,9 +41,7 @@ enum Action {
 #[derive(Debug, clap::Subcommand)]
 enum TargetAction {
   Get,
-  Set {
-    file: String,
-  },
+  Set { file: String },
   Edit,
 }
 
@@ -86,6 +87,16 @@ fn handle_success_or_error(response: ClientResponse) {
     } => println!("Success: {}", message),
     _ => panic!("Unexpected response: {:?}", response),
   }
+}
+
+fn progress_bar(prefix: &str, bytes: f64, full_size: f64) {
+  print!(
+    "\r{} {:.2}% ({:.2} / {:.2} MiB)",
+    prefix,
+    100.0 * bytes / full_size,
+    bytes / (1024.0 * 1024.0),
+    full_size / (1024.0 * 1024.0)
+  );
 }
 
 async fn main_result() -> Result<(), Error> {
@@ -167,10 +178,8 @@ async fn main_result() -> Result<(), Error> {
         println!("No changes -- not updating");
       } else {
         handle_success_or_error(
-          hujingzhi::send_request(hujingzhi::ClientRequest::SetTarget {
-            target: new_target,
-          })
-          .await?,
+          hujingzhi::send_request(hujingzhi::ClientRequest::SetTarget { target: new_target })
+            .await?,
         );
       }
     }
@@ -214,26 +223,54 @@ async fn main_result() -> Result<(), Error> {
       );
     }
     Action::Resource(ResourceAction::Up { name, file }) => {
-      let data = std::fs::read(&file)?;
-      handle_success_or_error(
-        hujingzhi::send_request(hujingzhi::ClientRequest::UploadResource {
-          name: name.unwrap_or(file),
-          data,
-        })
-        .await?,
-      );
+      use futures::TryStreamExt;
+      let full_size = std::fs::metadata(&file)?.len() as f64;
+      let mut bytes_written = 0.0;
+      let reader =
+        tokio_util::io::ReaderStream::new(tokio::fs::File::open(&file).await?).map_ok(move |x| {
+          bytes_written += x.len() as f64;
+          progress_bar("Uploading:", bytes_written, full_size);
+          x
+        });
+      let (client, host, port) = make_authenticated_client()?;
+      let response = client
+        .post(format!("https://hujingzhi:{}/upload", port))
+        .body(reqwest::Body::wrap_stream(reader))
+        .query(&[("name", name.unwrap_or(file))])
+        .send()
+        .await
+        .with_context(|| format!("Upload to {} failed", host))?
+        .text()
+        .await?;
+      handle_success_or_error(serde_json::from_str(&response)?);
     }
     Action::Resource(ResourceAction::Down { id, file }) => {
-      let response = handle_error_response(
-        hujingzhi::send_request(hujingzhi::ClientRequest::DownloadResource { id }).await?,
-      );
-      match response {
-        ClientResponse::Resource { id: _, data } => {
-          std::fs::write(&file, data)?;
-          println!("Success");
-        }
-        ClientResponse::Error { message } => println!("Error: {}", message),
-        _ => panic!("Unexpected response: {:?}", response),
+      use std::io::Write;
+
+      use futures::TryStreamExt;
+      let (client, host, port) = make_authenticated_client()?;
+      let response = client
+        .get(format!("https://hujingzhi:{}/download", port))
+        .query(&[("id", id)])
+        .send()
+        .await
+        .with_context(|| format!("Download from {} failed", host))?;
+      if !response.status().is_success() {
+        bail!("Download failed: {}", response.text().await?);
+      }
+      let full_size = response
+        .headers()
+        .get("content-length")
+        .and_then(|x| x.to_str().ok())
+        .and_then(|x| x.parse::<u64>().ok())
+        .unwrap_or(1) as f64;
+      let mut stream = response.bytes_stream();
+      let mut file = std::fs::File::create(file)?;
+      let mut bytes_written = 0.0;
+      while let Some(chunk) = stream.try_next().await? {
+        bytes_written += chunk.len() as f64;
+        progress_bar("Downloading:", bytes_written, full_size);
+        file.write_all(&chunk)?;
       }
     }
     Action::Resource(ResourceAction::Rm { ids }) => {
