@@ -224,12 +224,12 @@ async fn main_result() -> Result<(), Error> {
     }
     Action::Resource(ResourceAction::Up { name, file }) => {
       use futures::TryStreamExt;
-      let full_size = std::fs::metadata(&file)?.len() as f64;
-      let mut bytes_written = 0.0;
+      let full_size = std::fs::metadata(&file)?.len();
+      let mut bytes_written = 0;
       let reader =
         tokio_util::io::ReaderStream::new(tokio::fs::File::open(&file).await?).map_ok(move |x| {
-          bytes_written += x.len() as f64;
-          progress_bar("Uploading:", bytes_written, full_size);
+          bytes_written += x.len();
+          progress_bar("Uploading:", bytes_written as f64, full_size as f64);
           x
         });
       let (client, host, port) = make_authenticated_client()?;
@@ -237,11 +237,13 @@ async fn main_result() -> Result<(), Error> {
         .post(format!("https://hujingzhi:{}/upload", port))
         .body(reqwest::Body::wrap_stream(reader))
         .query(&[("name", name.unwrap_or(file))])
+        .header("Content-Length", full_size as u64)
         .send()
         .await
         .with_context(|| format!("Upload to {} failed", host))?
         .text()
         .await?;
+      println!(" Done.");
       handle_success_or_error(serde_json::from_str(&response)?);
     }
     Action::Resource(ResourceAction::Down { id, file }) => {
@@ -263,15 +265,16 @@ async fn main_result() -> Result<(), Error> {
         .get("content-length")
         .and_then(|x| x.to_str().ok())
         .and_then(|x| x.parse::<u64>().ok())
-        .unwrap_or(1) as f64;
+        .unwrap_or(1);
       let mut stream = response.bytes_stream();
       let mut file = std::fs::File::create(file)?;
-      let mut bytes_written = 0.0;
+      let mut bytes_written = 0;
       while let Some(chunk) = stream.try_next().await? {
-        bytes_written += chunk.len() as f64;
-        progress_bar("Downloading:", bytes_written, full_size);
+        bytes_written += chunk.len();
+        progress_bar("Downloading:", bytes_written as f64, full_size as f64);
         file.write_all(&chunk)?;
       }
+      println!(" Done.");
     }
     Action::Resource(ResourceAction::Rm { ids }) => {
       handle_success_or_error(
