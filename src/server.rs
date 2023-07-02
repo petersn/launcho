@@ -578,10 +578,12 @@ impl GlobalState {
         // If we have no target spec then we should kill all running versions.
         (None, _) => {
           for (_, version) in &mut process_set.running_versions {
-            log_event(LogEvent::Kill {
-              name: version.name.clone(),
-            });
-            version.process.kill().await.ok();
+            if !matches!(version.status, ProcessStatus::Exited { .. }) {
+              log_event(LogEvent::Kill {
+                name: version.name.clone(),
+              });
+              version.process.kill().await.ok();
+            }
           }
         }
         // If we have an up-to-date version that's either starting or running then we won't launch anything.
