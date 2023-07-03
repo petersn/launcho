@@ -130,7 +130,7 @@ pub fn insert_and_save_secret(secrets: &mut Secrets, key: &str, value: &str) -> 
 
 pub fn delete_extra_secrets(secrets: &mut Secrets, keys: &[String]) -> Result<String, Error> {
   let mut message = String::new();
-  let (_, mut extra_secrets): (_, BTreeMap<String, String>) = get_extra_secrets!();
+  let (extra_secrets_path, mut extra_secrets): (_, BTreeMap<String, String>) = get_extra_secrets!();
   for key in keys {
     message.push_str(&key);
     message.push_str(": ");
@@ -144,6 +144,9 @@ pub fn delete_extra_secrets(secrets: &mut Secrets, keys: &[String]) -> Result<St
       (false, false) => "Secret not found.\n",
     });
   }
+  let file_contents = serde_yaml::to_string(&extra_secrets)
+    .with_context(|| format!("Failed to serialize extra secrets"))?;
+  std::fs::write(extra_secrets_path, file_contents)?;
   Ok(message)
 }
 
