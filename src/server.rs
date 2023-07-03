@@ -868,6 +868,18 @@ impl GlobalState {
     Ok(())
   }
 
+  pub fn rebuild_target_after_secrets_change(&self, synced: &mut TokioMutexGuard<'_, SyncedGlobalState>) -> Result<bool, Error> {
+    let mut new_target: HujingzhiTarget = serde_yaml::from_str(&synced.target_text)?;
+    new_target.apply_secrets(&synced.secrets)?;
+    Self::validate_target(&new_target)?;
+    if new_target != synced.target {
+      self.change_target(synced, synced.target_text.clone(), new_target)?;
+      Ok(true)
+    } else {
+      Ok(false)
+    }
+  }
+
   async fn handle_request(&self, request: ClientRequest) -> Result<ClientResponse, Error> {
     Ok(match request {
       ClientRequest::Ping => ClientResponse::Pong,
@@ -909,11 +921,22 @@ impl GlobalState {
       ClientRequest::SetSecret { name, value } => {
         let mut synced = self.synced.lock().await;
         insert_and_save_secret(&mut synced.secrets, &name, &value)?;
-        ClientResponse::Success { message: None }
+        let changed = self.rebuild_target_after_secrets_change(&mut synced)?;
+        ClientResponse::Success { message: Some(
+          match changed {
+            true => "Secret updated, target changed",
+            false => "Secret updated, target unchanged",
+          }.to_string(),
+        ) }
       }
       ClientRequest::DeleteSecrets { names } => {
         let mut synced = self.synced.lock().await;
-        ClientResponse::Success { message: Some(delete_extra_secrets(&mut synced.secrets, &names)?) }
+        let mut message = delete_extra_secrets(&mut synced.secrets, &names)?;
+        let changed = self.rebuild_target_after_secrets_change(&mut synced)?;
+        if changed {
+          message.push_str("(target changed)\n");
+        }
+        ClientResponse::Success { message: Some(message) }
       }
       ClientRequest::ListSecrets => {
         let synced = self.synced.lock().await;

@@ -151,8 +151,6 @@ pub fn delete_extra_secrets(
       (false, false) => "Secret not found.\n",
     });
   }
-  // Trim the final newline.
-  message.pop();
   Ok(message)
 }
 
