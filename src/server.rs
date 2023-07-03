@@ -898,6 +898,15 @@ impl GlobalState {
           ),
         }
       }
+      ClientRequest::GetSecrets { names } => {
+        ClientResponse::Secrets { secrets: names.into_iter().map(|name| {
+          let secret = self.secrets.0.get(&name).cloned();
+          (name, secret)
+        }).collect() }
+      }
+      ClientRequest::ListSecrets => {
+        ClientResponse::SecretList { secrets: self.secrets.0.keys().cloned().collect() }
+      }
       ClientRequest::Status => {
         let synced = self.synced.lock().await;
         let mut formatted_status = String::new();

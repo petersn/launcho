@@ -79,6 +79,8 @@ pub enum ClientRequest {
   Ping,
   GetTarget,
   SetTarget { target: String },
+  GetSecrets { names: Vec<String> },
+  ListSecrets,
   Status,
   GetLogs { name: String },
   Restart { name: String },
@@ -115,6 +117,12 @@ pub enum ClientResponse {
   },
   ResourceList {
     resources: Vec<ResourceListEntry>,
+  },
+  Secrets {
+    secrets: Vec<(String, Option<String>)>,
+  },
+  SecretList {
+    secrets: Vec<String>,
   },
 }
 

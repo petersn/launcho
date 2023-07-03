@@ -26,6 +26,8 @@ enum Action {
   Target(TargetAction),
   #[clap(subcommand, aliases = &["r", "resources"])]
   Resource(ResourceAction),
+  #[clap(subcommand, aliases = &["s", "secrets"])]
+  Secret(SecretAction),
   Status {
     #[clap(long, action)]
     ipvs: bool,
@@ -61,6 +63,14 @@ enum ResourceAction {
   },
   Rm {
     ids: Vec<String>,
+  },
+  Ls,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum SecretAction {
+  Get {
+    names: Vec<String>,
   },
   Ls,
 }
@@ -184,6 +194,35 @@ async fn main_result() -> Result<(), Error> {
           hujingzhi::send_request(hujingzhi::ClientRequest::SetTarget { target: new_target })
             .await?,
         );
+      }
+    }
+    Action::Secret(SecretAction::Get { names }) => {
+      let response = handle_error_response(
+        hujingzhi::send_request(hujingzhi::ClientRequest::GetSecrets { names }).await?,
+      );
+      match response {
+        ClientResponse::Secrets { secrets } => {
+          for (name, secret) in secrets {
+            print!("{}: ", name);
+            match secret {
+              Some(secret) => println!("{:?}", secret),
+              None => println!("(not found)"),
+            }
+          }
+        }
+        _ => panic!("Unexpected response: {:?}", response),
+      }
+    }
+    Action::Secret(SecretAction::Ls) => {
+      let response =
+        handle_error_response(hujingzhi::send_request(hujingzhi::ClientRequest::ListSecrets).await?);
+      match response {
+        ClientResponse::SecretList { secrets } => {
+          for name in secrets {
+            println!("{}", name);
+          }
+        }
+        _ => panic!("Unexpected response: {:?}", response),
       }
     }
     Action::Status { ipvs } => {

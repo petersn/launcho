@@ -18,7 +18,7 @@ impl ServerSpec {
   }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Secrets(pub HashMap<String, String>);
 
@@ -80,6 +80,15 @@ impl SecretsSpec {
     }
 
     Ok(Secrets(secrets))
+  }
+
+  pub fn apply_secrets(&mut self, secrets: &Secrets) -> Result<(), Error> {
+    if let Some(env) = &mut self.env {
+      for key in env {
+        *key = secrets.substitute(key)?;
+      }
+    }
+    Ok(())
   }
 }
 
@@ -224,8 +233,8 @@ impl ServiceSpec {
 #[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HujingzhiTarget {
-  pub processes: Vec<ProcessSpec>,
   pub services:  Vec<ServiceSpec>,
+  pub processes: Vec<ProcessSpec>,
 }
 
 impl HujingzhiTarget {
