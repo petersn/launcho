@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::{io::Write, path::PathBuf};
 
 use anyhow::{bail, Context, Error};
 use clap::Parser;
@@ -72,6 +72,13 @@ enum SecretAction {
   Get {
     names: Vec<String>,
   },
+  Set {
+    name: String,
+    value: String,
+  },
+  Rm {
+    names: Vec<String>,
+  },
   Ls,
 }
 
@@ -142,7 +149,7 @@ async fn main_result() -> Result<(), Error> {
         let using_default_config_path = maybe_config_path.is_none();
         // Parse the config file.
         let config_path = match maybe_config_path {
-          Some(config_path) => config_path,
+          Some(config_path) => PathBuf::from(config_path),
           None => get_config_path()?,
         };
         let config_string_result = std::fs::read_to_string(&config_path);
@@ -150,14 +157,14 @@ async fn main_result() -> Result<(), Error> {
           (_, Ok(config_string)) => config_string,
           (true, Err(e)) if e.kind() == std::io::ErrorKind::NotFound => {
             hujingzhi::server::log_event(hujingzhi::LogEvent::Warning {
-              msg: format!("Config file not found at {} -- writing default config", config_path),
+              msg: format!("Config file not found at {:?} -- writing default config", config_path),
             });
             guarantee_hjz_directory()?;
             let default_config = include_str!("../default-config.yaml");
             std::fs::write(&config_path, &default_config)?;
             default_config.to_string()
           }
-          (_, Err(e)) => bail!("Failed to read config file at {}: {}", config_path, e),
+          (_, Err(e)) => bail!("Failed to read config file at {:?}: {}", config_path, e),
         };
         let server_config = serde_yaml::from_str(&config_string)?;
         hujingzhi::server::server_main(server_config).await?
@@ -212,6 +219,20 @@ async fn main_result() -> Result<(), Error> {
         }
         _ => panic!("Unexpected response: {:?}", response),
       }
+    }
+    Action::Secret(SecretAction::Set { name, value }) => {
+      handle_success_or_error(
+        hujingzhi::send_request(hujingzhi::ClientRequest::SetSecret {
+          name,
+          value,
+        })
+        .await?,
+      );
+    }
+    Action::Secret(SecretAction::Rm { names }) => {
+      handle_success_or_error(
+        hujingzhi::send_request(hujingzhi::ClientRequest::DeleteSecrets { names }).await?,
+      );
     }
     Action::Secret(SecretAction::Ls) => {
       let response =

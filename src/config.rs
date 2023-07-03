@@ -3,6 +3,8 @@ use std::collections::{BTreeMap, HashMap};
 use anyhow::{bail, Context, Error};
 use serde::{Deserialize, Serialize};
 
+use crate::get_extra_secrets_path;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ServerSpec {
@@ -79,6 +81,14 @@ impl SecretsSpec {
       secrets.extend(values.clone());
     }
 
+    // Load extra secrets.
+    let extra_secrets_path = get_extra_secrets_path()?;
+    if let Ok(file_contents) = std::fs::read_to_string(&extra_secrets_path) {
+      let file_secrets: HashMap<String, String> = serde_yaml::from_str(&file_contents)
+        .with_context(|| format!("Failed to parse extra secrets file {:?}", extra_secrets_path))?;
+      secrets.extend(file_secrets);
+    }
+
     Ok(Secrets(secrets))
   }
 
@@ -90,6 +100,60 @@ impl SecretsSpec {
     }
     Ok(())
   }
+}
+
+macro_rules! get_extra_secrets {
+  () => {{
+    let extra_secrets_path = get_extra_secrets_path()?;
+    let extra_secrets = if extra_secrets_path.exists() {
+      let file_contents = std::fs::read_to_string(&extra_secrets_path)
+        .with_context(|| format!("Failed to read extra secrets file {:?}", extra_secrets_path))?;
+      serde_yaml::from_str(&file_contents)
+        .with_context(|| format!("Failed to parse extra secrets file {:?}", extra_secrets_path))?
+    } else {
+      BTreeMap::new()
+    };
+    (extra_secrets_path, extra_secrets)
+  }}
+}
+
+pub fn insert_and_save_secret(
+  secrets: &mut Secrets,
+  key: &str,
+  value: &str,
+) -> Result<(), Error> {
+  let (extra_secrets_path, mut extra_secrets) = get_extra_secrets!();
+  extra_secrets.insert(key.to_string(), value.to_string());
+  let file_contents = serde_yaml::to_string(&extra_secrets)
+    .with_context(|| format!("Failed to serialize extra secrets"))?;
+  std::fs::write(&extra_secrets_path, file_contents)?;
+  // Don't update the secrets locally until we successfully save it.
+  secrets.0.insert(key.to_string(), value.to_string());
+  Ok(())
+}
+
+pub fn delete_extra_secrets(
+  secrets: &mut Secrets,
+  keys: &[String],
+) -> Result<String, Error> {
+  let mut message = String::new();
+  let (_, mut extra_secrets): (_, BTreeMap<String, String>) = get_extra_secrets!();
+  for key in keys {
+    message.push_str(&key);
+    message.push_str(": ");
+    message.push_str(match (
+      secrets.0.remove(key).is_some(),
+      extra_secrets.remove(key).is_some(),
+    ) {
+      (true, true) => "Deleted.\n",
+      (true, false) => "Deleted. Warning: This secret was set in the main config, and will come back on server restart.\n",
+      (false, true) => "BUG: Secret only found in extra secrets, for some reason!\n",
+      (false, false) => "Secret not found.\n",
+    });
+  }
+  // Trim the final newline.
+  message.pop();
+  Ok(message)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

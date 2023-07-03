@@ -14,7 +14,7 @@ use tokio::{
 use warp::Filter;
 
 use crate::{
-  config::{AuthConfig, HujingzhiConfig, HujingzhiTarget, ProcessSpec, Secrets, ServiceSpec},
+  config::{AuthConfig, HujingzhiConfig, HujingzhiTarget, ProcessSpec, Secrets, ServiceSpec, insert_and_save_secret, delete_extra_secrets},
   get_auth_config, get_target, get_target_path, guarantee_hjz_directory, storage, ClientRequest,
   ClientResponse, LogEvent, ProcessStatus,
 };
@@ -302,6 +302,7 @@ struct AppliedIpvsService {
 }
 
 struct SyncedGlobalState {
+  secrets:             Secrets,
   target_text:         String,
   target:              HujingzhiTarget,
   clean_services:      HashSet<AppliedIpvsService>,
@@ -342,7 +343,7 @@ fn release_port(
 }
 
 struct GlobalState {
-  secrets: Secrets,
+  // Whoops, I no longer have any unsynced state. Should I remove this extra type?
   synced:  TokioMutex<SyncedGlobalState>,
 }
 
@@ -373,8 +374,8 @@ impl GlobalState {
       }
     };
     let this = Self {
-      secrets,
       synced: TokioMutex::new(SyncedGlobalState {
+        secrets,
         target_text,
         target,
         clean_services: HashSet::new(),
@@ -879,11 +880,11 @@ impl GlobalState {
       ClientRequest::SetTarget {
         target: target_text,
       } => {
+        let mut synced = self.synced.lock().await;
         let mut target: HujingzhiTarget = serde_yaml::from_str(&target_text)?;
-        target.apply_secrets(&self.secrets)?;
+        target.apply_secrets(&synced.secrets)?;
         Self::validate_target(&target)?;
         std::fs::write(get_target_path()?, &target_text)?;
-        let mut synced = self.synced.lock().await;
         let changed = synced.target != target;
         if changed {
           self.change_target(&mut synced, target_text, target)?;
@@ -899,13 +900,24 @@ impl GlobalState {
         }
       }
       ClientRequest::GetSecrets { names } => {
+        let synced = self.synced.lock().await;
         ClientResponse::Secrets { secrets: names.into_iter().map(|name| {
-          let secret = self.secrets.0.get(&name).cloned();
+          let secret = synced.secrets.0.get(&name).cloned();
           (name, secret)
         }).collect() }
       }
+      ClientRequest::SetSecret { name, value } => {
+        let mut synced = self.synced.lock().await;
+        insert_and_save_secret(&mut synced.secrets, &name, &value)?;
+        ClientResponse::Success { message: None }
+      }
+      ClientRequest::DeleteSecrets { names } => {
+        let mut synced = self.synced.lock().await;
+        ClientResponse::Success { message: Some(delete_extra_secrets(&mut synced.secrets, &names)?) }
+      }
       ClientRequest::ListSecrets => {
-        ClientResponse::SecretList { secrets: self.secrets.0.keys().cloned().collect() }
+        let synced = self.synced.lock().await;
+        ClientResponse::SecretList { secrets: synced.secrets.0.keys().cloned().collect() }
       }
       ClientRequest::Status => {
         let synced = self.synced.lock().await;
