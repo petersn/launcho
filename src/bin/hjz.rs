@@ -69,16 +69,9 @@ enum ResourceAction {
 
 #[derive(Debug, clap::Subcommand)]
 enum SecretAction {
-  Get {
-    names: Vec<String>,
-  },
-  Set {
-    name: String,
-    value: String,
-  },
-  Rm {
-    names: Vec<String>,
-  },
+  Get { names: Vec<String> },
+  Set { name: String, value: String },
+  Rm { names: Vec<String> },
   Ls,
 }
 
@@ -208,25 +201,20 @@ async fn main_result() -> Result<(), Error> {
         hujingzhi::send_request(hujingzhi::ClientRequest::GetSecrets { names }).await?,
       );
       match response {
-        ClientResponse::Secrets { secrets } => {
+        ClientResponse::Secrets { secrets } =>
           for (name, secret) in secrets {
             print!("{}: ", name);
             match secret {
               Some(secret) => println!("{:?}", secret),
               None => println!("(not found)"),
             }
-          }
-        }
+          },
         _ => panic!("Unexpected response: {:?}", response),
       }
     }
     Action::Secret(SecretAction::Set { name, value }) => {
       handle_success_or_error(
-        hujingzhi::send_request(hujingzhi::ClientRequest::SetSecret {
-          name,
-          value,
-        })
-        .await?,
+        hujingzhi::send_request(hujingzhi::ClientRequest::SetSecret { name, value }).await?,
       );
     }
     Action::Secret(SecretAction::Rm { names }) => {
@@ -235,14 +223,14 @@ async fn main_result() -> Result<(), Error> {
       );
     }
     Action::Secret(SecretAction::Ls) => {
-      let response =
-        handle_error_response(hujingzhi::send_request(hujingzhi::ClientRequest::ListSecrets).await?);
+      let response = handle_error_response(
+        hujingzhi::send_request(hujingzhi::ClientRequest::ListSecrets).await?,
+      );
       match response {
-        ClientResponse::SecretList { secrets } => {
+        ClientResponse::SecretList { secrets } =>
           for name in secrets {
             println!("{}", name);
-          }
-        }
+          },
         _ => panic!("Unexpected response: {:?}", response),
       }
     }

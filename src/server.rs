@@ -14,7 +14,10 @@ use tokio::{
 use warp::Filter;
 
 use crate::{
-  config::{AuthConfig, HujingzhiConfig, HujingzhiTarget, ProcessSpec, Secrets, ServiceSpec, insert_and_save_secret, delete_extra_secrets},
+  config::{
+    delete_extra_secrets, insert_and_save_secret, AuthConfig, HujingzhiConfig, HujingzhiTarget,
+    ProcessSpec, Secrets, ServiceSpec,
+  },
   get_auth_config, get_target, get_target_path, guarantee_hjz_directory, storage, ClientRequest,
   ClientResponse, LogEvent, ProcessStatus,
 };
@@ -344,7 +347,7 @@ fn release_port(
 
 struct GlobalState {
   // Whoops, I no longer have any unsynced state. Should I remove this extra type?
-  synced:  TokioMutex<SyncedGlobalState>,
+  synced: TokioMutex<SyncedGlobalState>,
 }
 
 impl GlobalState {
@@ -577,7 +580,7 @@ impl GlobalState {
       let most_recent_version = process_set.running_versions.last();
       match (target_spec, most_recent_version) {
         // If we have no target spec then we should kill all running versions.
-        (None, _) => {
+        (None, _) =>
           for (_, version) in &mut process_set.running_versions {
             if !matches!(version.status, ProcessStatus::Exited { .. }) {
               log_event(LogEvent::Kill {
@@ -585,8 +588,7 @@ impl GlobalState {
               });
               version.process.kill().await.ok();
             }
-          }
-        }
+          },
         // If we have an up-to-date version that's either starting or running then we won't launch anything.
         (
           Some(target_spec),
@@ -868,7 +870,10 @@ impl GlobalState {
     Ok(())
   }
 
-  pub fn rebuild_target_after_secrets_change(&self, synced: &mut TokioMutexGuard<'_, SyncedGlobalState>) -> Result<bool, Error> {
+  pub fn rebuild_target_after_secrets_change(
+    &self,
+    synced: &mut TokioMutexGuard<'_, SyncedGlobalState>,
+  ) -> Result<bool, Error> {
     let mut new_target: HujingzhiTarget = serde_yaml::from_str(&synced.target_text)?;
     new_target.apply_secrets(&synced.secrets)?;
     Self::validate_target(&new_target)?;
@@ -913,21 +918,29 @@ impl GlobalState {
       }
       ClientRequest::GetSecrets { names } => {
         let synced = self.synced.lock().await;
-        ClientResponse::Secrets { secrets: names.into_iter().map(|name| {
-          let secret = synced.secrets.0.get(&name).cloned();
-          (name, secret)
-        }).collect() }
+        ClientResponse::Secrets {
+          secrets: names
+            .into_iter()
+            .map(|name| {
+              let secret = synced.secrets.0.get(&name).cloned();
+              (name, secret)
+            })
+            .collect(),
+        }
       }
       ClientRequest::SetSecret { name, value } => {
         let mut synced = self.synced.lock().await;
         insert_and_save_secret(&mut synced.secrets, &name, &value)?;
         let changed = self.rebuild_target_after_secrets_change(&mut synced)?;
-        ClientResponse::Success { message: Some(
-          match changed {
-            true => "Secret updated, target changed",
-            false => "Secret updated, target unchanged",
-          }.to_string(),
-        ) }
+        ClientResponse::Success {
+          message: Some(
+            match changed {
+              true => "Secret updated, target changed",
+              false => "Secret updated, target unchanged",
+            }
+            .to_string(),
+          ),
+        }
       }
       ClientRequest::DeleteSecrets { names } => {
         let mut synced = self.synced.lock().await;
@@ -936,11 +949,15 @@ impl GlobalState {
         if changed {
           message.push_str("(target changed)\n");
         }
-        ClientResponse::Success { message: Some(message) }
+        ClientResponse::Success {
+          message: Some(message),
+        }
       }
       ClientRequest::ListSecrets => {
         let synced = self.synced.lock().await;
-        ClientResponse::SecretList { secrets: synced.secrets.0.keys().cloned().collect() }
+        ClientResponse::SecretList {
+          secrets: synced.secrets.0.keys().cloned().collect(),
+        }
       }
       ClientRequest::Status => {
         let synced = self.synced.lock().await;

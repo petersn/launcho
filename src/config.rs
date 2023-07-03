@@ -114,14 +114,10 @@ macro_rules! get_extra_secrets {
       BTreeMap::new()
     };
     (extra_secrets_path, extra_secrets)
-  }}
+  }};
 }
 
-pub fn insert_and_save_secret(
-  secrets: &mut Secrets,
-  key: &str,
-  value: &str,
-) -> Result<(), Error> {
+pub fn insert_and_save_secret(secrets: &mut Secrets, key: &str, value: &str) -> Result<(), Error> {
   let (extra_secrets_path, mut extra_secrets) = get_extra_secrets!();
   extra_secrets.insert(key.to_string(), value.to_string());
   let file_contents = serde_yaml::to_string(&extra_secrets)
@@ -132,10 +128,7 @@ pub fn insert_and_save_secret(
   Ok(())
 }
 
-pub fn delete_extra_secrets(
-  secrets: &mut Secrets,
-  keys: &[String],
-) -> Result<String, Error> {
+pub fn delete_extra_secrets(secrets: &mut Secrets, keys: &[String]) -> Result<String, Error> {
   let mut message = String::new();
   let (_, mut extra_secrets): (_, BTreeMap<String, String>) = get_extra_secrets!();
   for key in keys {
