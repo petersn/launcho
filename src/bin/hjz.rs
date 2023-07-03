@@ -218,9 +218,17 @@ async fn main_result() -> Result<(), Error> {
       );
     }
     Action::Secret(SecretAction::Rm { names }) => {
-      handle_success_or_error(
+      let response = handle_error_response(
         hujingzhi::send_request(hujingzhi::ClientRequest::DeleteSecrets { names }).await?,
       );
+      match response {
+        ClientResponse::Success {
+          message: Some(message),
+        } => println!("{}", message.trim()),
+        ClientResponse::Success { message: None } =>
+          println!("Unexpected lack of message from server, but operation succeeded"),
+        _ => panic!("Unexpected response"),
+      }
     }
     Action::Secret(SecretAction::Ls) => {
       let response = handle_error_response(
