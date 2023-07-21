@@ -1,6 +1,6 @@
-# Launcho - Simple orchestration
+# Launcho - Ultra-simplified k8s replacement in 2k lines of Rust
 
-I got frustrated with the complexity of k8s, so I'm writing the dumbest orchestration I can.
+I got frustrated with the complexity of k8s, so I'm writing the dumbest replacement I can.
 All this program does is:
 * Relaunch processes that die
 * Perform health checks, and relaunch processes that fail
