@@ -16,7 +16,7 @@ server:
   admin_host: "0.0.0.0"
   admin_port: 12888
   # Ports to use for ipvs loopback connections to services.
-  # hjz will check to see if a port is in use before mapping it
+  # launcho will check to see if a port is in use before mapping it
   # with ipvs, so it's not the end of the world if this range
   # includes some other running services.
   loopback_ports: [30100, 35000]

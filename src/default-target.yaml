@@ -1,5 +1,5 @@
 # No orchestration target set, this is an example file.
-# Use `hjz get-target` and `hjz set-target` to edit this.
+# Use `launcho target get` and `launcho target set` to edit this.
 
 # Create processes like this:
 processes:
