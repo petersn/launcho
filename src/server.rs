@@ -18,7 +18,7 @@ use crate::{
     delete_extra_secrets, insert_and_save_secret, AuthConfig, LaunchoConfig, LaunchoTarget,
     ProcessSpec, Secrets, ServiceSpec,
   },
-  get_auth_config, get_target, get_target_path, guarantee_lcho_directory, storage, ClientRequest,
+  get_auth_config, get_target, get_target_path, guarantee_launcho_directory, storage, ClientRequest,
   ClientResponse, LogEvent, ProcessStatus,
 };
 use crate::{ipvs, GetAuthConfigMode};
@@ -422,9 +422,9 @@ impl GlobalState {
       Some(cwd) => PathBuf::from(cwd),
       None => {
         // FIXME: Clean this stuff up.
-        crate::already_exists_ok(std::fs::create_dir(&"/tmp/lcho-procs"))?;
+        crate::already_exists_ok(std::fs::create_dir(&"/tmp/launcho-procs"))?;
         let nonce: u64 = rand::random();
-        let path = format!("/tmp/lcho-procs/tmp-{:x}", nonce);
+        let path = format!("/tmp/launcho-procs/tmp-{:x}", nonce);
         crate::already_exists_ok(std::fs::create_dir(&path))?;
         command.current_dir(&path);
         PathBuf::from(path)
@@ -1052,7 +1052,7 @@ impl GlobalState {
 }
 
 pub async fn server_main(mut config: LaunchoConfig) -> Result<(), Error> {
-  guarantee_lcho_directory()?;
+  guarantee_launcho_directory()?;
 
   let secrets = config.secrets.load()?;
   config.apply_secrets(&secrets)?;

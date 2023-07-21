@@ -136,9 +136,9 @@ pub enum GetAuthConfigMode {
   Client,
 }
 
-pub fn get_lcho_directory() -> Result<PathBuf, Error> {
+pub fn get_launcho_directory() -> Result<PathBuf, Error> {
   let home = std::env::var_os("HOME").context("HOME environment variable not set")?;
-  Ok(PathBuf::from(home).join(".lcho"))
+  Ok(PathBuf::from(home).join(".launcho"))
 }
 
 pub fn already_exists_ok(result: std::io::Result<()>) -> std::io::Result<()> {
@@ -149,21 +149,21 @@ pub fn already_exists_ok(result: std::io::Result<()>) -> std::io::Result<()> {
   }
 }
 
-pub fn guarantee_lcho_directory() -> Result<(), Error> {
-  let lcho_dir = get_lcho_directory()?;
-  already_exists_ok(std::fs::create_dir(&lcho_dir))?;
-  already_exists_ok(std::fs::create_dir(lcho_dir.join("storage")))?;
+pub fn guarantee_launcho_directory() -> Result<(), Error> {
+  let launcho_dir = get_launcho_directory()?;
+  already_exists_ok(std::fs::create_dir(&launcho_dir))?;
+  already_exists_ok(std::fs::create_dir(launcho_dir.join("storage")))?;
   Ok(())
 }
 
 pub fn get_auth_config(mode: GetAuthConfigMode) -> Result<AuthConfig, Error> {
   let config_path_suffix = match mode {
     GetAuthConfigMode::ServerCreateIfNotExists | GetAuthConfigMode::ServerFailIfNotExists =>
-      "lcho-server-auth.yaml",
-    GetAuthConfigMode::Client => "lcho-client-auth.yaml",
+      "launcho-server-auth.yaml",
+    GetAuthConfigMode::Client => "launcho-client-auth.yaml",
   };
-  let lcho_dir = get_lcho_directory()?;
-  let config_path = lcho_dir.join(config_path_suffix);
+  let launcho_dir = get_launcho_directory()?;
+  let config_path = launcho_dir.join(config_path_suffix);
   if let Ok(auth_config_string) = std::fs::read_to_string(&config_path) {
     let auth_config: AuthConfig = serde_yaml::from_str(&auth_config_string)?;
     return Ok(auth_config);
@@ -172,7 +172,7 @@ pub fn get_auth_config(mode: GetAuthConfigMode) -> Result<AuthConfig, Error> {
     GetAuthConfigMode::ServerFailIfNotExists =>
       bail!("Auth info not found at {:?}\nStart the server to create the auth.", config_path),
     GetAuthConfigMode::Client =>
-      bail!("Auth info not found at {:?}\nOn the server run `lcho print-auth`, and paste the result into a file at {:?}", config_path, config_path),
+      bail!("Auth info not found at {:?}\nOn the server run `launcho print-auth`, and paste the result into a file at {:?}", config_path, config_path),
     GetAuthConfigMode::ServerCreateIfNotExists => {},
   }
   #[cfg(target_os = "linux")]
@@ -188,24 +188,24 @@ pub fn get_auth_config(mode: GetAuthConfigMode) -> Result<AuthConfig, Error> {
     token:   make_cryptographic_token(),
   };
   let auth_config_yaml = serde_yaml::to_string(&auth_config)?;
-  guarantee_lcho_directory()?;
+  guarantee_launcho_directory()?;
   std::fs::write(config_path, &auth_config_yaml)?;
   Ok(auth_config)
 }
 
 pub fn get_config_path() -> Result<PathBuf, Error> {
-  let lcho_dir = get_lcho_directory()?;
-  Ok(lcho_dir.join("lcho-config.yaml"))
+  let launcho_dir = get_launcho_directory()?;
+  Ok(launcho_dir.join("launcho-config.yaml"))
 }
 
 pub fn get_target_path() -> Result<PathBuf, Error> {
-  let lcho_dir = get_lcho_directory()?;
-  Ok(lcho_dir.join("lcho-target.yaml"))
+  let launcho_dir = get_launcho_directory()?;
+  Ok(launcho_dir.join("launcho-target.yaml"))
 }
 
 pub fn get_extra_secrets_path() -> Result<PathBuf, Error> {
-  let lcho_dir = get_lcho_directory()?;
-  Ok(lcho_dir.join("lcho-extra-secrets.yaml"))
+  let launcho_dir = get_launcho_directory()?;
+  Ok(launcho_dir.join("launcho-extra-secrets.yaml"))
 }
 
 pub fn get_target() -> Result<(String, LaunchoTarget), Error> {

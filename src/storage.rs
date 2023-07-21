@@ -2,10 +2,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Error};
 
-use crate::{get_lcho_directory, ResourceListEntry};
+use crate::{get_launcho_directory, ResourceListEntry};
 
 pub fn get_storage_dir() -> Result<PathBuf, Error> {
-  Ok(get_lcho_directory()?.join("storage"))
+  Ok(get_launcho_directory()?.join("storage"))
 }
 
 pub fn write_resource(name: String, data: &[u8]) -> Result<String, Error> {

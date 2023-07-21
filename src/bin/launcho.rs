@@ -3,8 +3,8 @@ use std::{io::Write, path::PathBuf};
 use anyhow::{bail, Context, Error};
 use clap::Parser;
 use futures::TryStreamExt;
-use hujingzhi::{
-  get_config_path, guarantee_hjz_directory, make_authenticated_client, ClientResponse,
+use launcho::{
+  get_config_path, guarantee_launcho_directory, make_authenticated_client, ClientResponse,
   GetAuthConfigMode,
 };
 
@@ -118,13 +118,13 @@ async fn main_result() -> Result<(), Error> {
 
   Ok(match args.action {
     Action::Version => {
-      println!("hujingzhi {}", env!("CARGO_PKG_VERSION"));
+      println!("launcho {}", env!("CARGO_PKG_VERSION"));
     }
     Action::PrintAuth => {
-      let mut auth_config = hujingzhi::get_auth_config(GetAuthConfigMode::ServerFailIfNotExists)?;
+      let mut auth_config = launcho::get_auth_config(GetAuthConfigMode::ServerFailIfNotExists)?;
       auth_config.host = Some("change-me-to-point-to-the-server.example.com:12888".to_string());
       auth_config.private = None;
-      println!("# Paste this into ~/.hjz/hjz-client-auth.yaml on the client machine");
+      println!("# Paste this into ~/.launcho/launcho-client-auth.yaml on the client machine");
       print!("{}", serde_yaml::to_string(&auth_config)?);
     }
     Action::Server {
@@ -134,7 +134,7 @@ async fn main_result() -> Result<(), Error> {
       #[cfg(not(target_os = "linux"))]
       {
         std::mem::drop(maybe_config_path); // Suppress warning.
-        eprintln!("hjz server only works on Linux");
+        eprintln!("launcho server only works on Linux");
         std::process::exit(1);
       }
       #[cfg(target_os = "linux")]
@@ -149,10 +149,10 @@ async fn main_result() -> Result<(), Error> {
         let config_string = match (using_default_config_path, config_string_result) {
           (_, Ok(config_string)) => config_string,
           (true, Err(e)) if e.kind() == std::io::ErrorKind::NotFound => {
-            hujingzhi::server::log_event(hujingzhi::LogEvent::Warning {
+            launcho::server::log_event(launcho::LogEvent::Warning {
               msg: format!("Config file not found at {:?} -- writing default config", config_path),
             });
-            guarantee_hjz_directory()?;
+            guarantee_launcho_directory()?;
             let default_config = include_str!("../default-config.yaml");
             std::fs::write(&config_path, &default_config)?;
             default_config.to_string()
@@ -160,12 +160,12 @@ async fn main_result() -> Result<(), Error> {
           (_, Err(e)) => bail!("Failed to read config file at {:?}: {}", config_path, e),
         };
         let server_config = serde_yaml::from_str(&config_string)?;
-        hujingzhi::server::server_main(server_config).await?
+        launcho::server::server_main(server_config).await?
       }
     }
     Action::Target(TargetAction::Get) => {
       let response =
-        handle_error_response(hujingzhi::send_request(hujingzhi::ClientRequest::GetTarget).await?);
+        handle_error_response(launcho::send_request(launcho::ClientRequest::GetTarget).await?);
       match response {
         ClientResponse::Target { target } => print!("{}", target),
         _ => panic!("Unexpected response: {:?}", response),
@@ -173,7 +173,7 @@ async fn main_result() -> Result<(), Error> {
     }
     Action::Target(TargetAction::Set { file }) => {
       handle_success_or_error(
-        hujingzhi::send_request(hujingzhi::ClientRequest::SetTarget {
+        launcho::send_request(launcho::ClientRequest::SetTarget {
           target: std::fs::read_to_string(&file)?,
         })
         .await?,
@@ -181,7 +181,7 @@ async fn main_result() -> Result<(), Error> {
     }
     Action::Target(TargetAction::Edit) => {
       let response =
-        handle_error_response(hujingzhi::send_request(hujingzhi::ClientRequest::GetTarget).await?);
+        handle_error_response(launcho::send_request(launcho::ClientRequest::GetTarget).await?);
       let target = match response {
         ClientResponse::Target { target } => target,
         _ => panic!("Unexpected response: {:?}", response),
@@ -191,14 +191,14 @@ async fn main_result() -> Result<(), Error> {
         println!("No changes -- not updating");
       } else {
         handle_success_or_error(
-          hujingzhi::send_request(hujingzhi::ClientRequest::SetTarget { target: new_target })
+          launcho::send_request(launcho::ClientRequest::SetTarget { target: new_target })
             .await?,
         );
       }
     }
     Action::Secret(SecretAction::Get { names }) => {
       let response = handle_error_response(
-        hujingzhi::send_request(hujingzhi::ClientRequest::GetSecrets { names }).await?,
+        launcho::send_request(launcho::ClientRequest::GetSecrets { names }).await?,
       );
       match response {
         ClientResponse::Secrets { secrets } =>
@@ -214,12 +214,12 @@ async fn main_result() -> Result<(), Error> {
     }
     Action::Secret(SecretAction::Set { name, value }) => {
       handle_success_or_error(
-        hujingzhi::send_request(hujingzhi::ClientRequest::SetSecret { name, value }).await?,
+        launcho::send_request(launcho::ClientRequest::SetSecret { name, value }).await?,
       );
     }
     Action::Secret(SecretAction::Rm { names }) => {
       let response = handle_error_response(
-        hujingzhi::send_request(hujingzhi::ClientRequest::DeleteSecrets { names }).await?,
+        launcho::send_request(launcho::ClientRequest::DeleteSecrets { names }).await?,
       );
       match response {
         ClientResponse::Success {
@@ -232,7 +232,7 @@ async fn main_result() -> Result<(), Error> {
     }
     Action::Secret(SecretAction::Ls) => {
       let response = handle_error_response(
-        hujingzhi::send_request(hujingzhi::ClientRequest::ListSecrets).await?,
+        launcho::send_request(launcho::ClientRequest::ListSecrets).await?,
       );
       match response {
         ClientResponse::SecretList { secrets } =>
@@ -245,7 +245,7 @@ async fn main_result() -> Result<(), Error> {
     Action::Status { ipvs } => {
       println!("Events:");
       let response =
-        handle_error_response(hujingzhi::send_request(hujingzhi::ClientRequest::Status).await?);
+        handle_error_response(launcho::send_request(launcho::ClientRequest::Status).await?);
       match response {
         ClientResponse::Status {
           status,
@@ -266,7 +266,7 @@ async fn main_result() -> Result<(), Error> {
     }
     Action::Logs { process } => {
       let response = handle_error_response(
-        hujingzhi::send_request(hujingzhi::ClientRequest::GetLogs { name: process }).await?,
+        launcho::send_request(launcho::ClientRequest::GetLogs { name: process }).await?,
       );
       match response {
         ClientResponse::Logs { name, output } => {
@@ -278,7 +278,7 @@ async fn main_result() -> Result<(), Error> {
     }
     Action::RestartProcess { process } => {
       handle_success_or_error(
-        hujingzhi::send_request(hujingzhi::ClientRequest::Restart { name: process }).await?,
+        launcho::send_request(launcho::ClientRequest::Restart { name: process }).await?,
       );
     }
     Action::Resource(ResourceAction::Up { name, file }) => {
@@ -292,7 +292,7 @@ async fn main_result() -> Result<(), Error> {
         });
       let (client, host, port) = make_authenticated_client()?;
       let response = client
-        .post(format!("https://hujingzhi:{}/upload", port))
+        .post(format!("https://launcho:{}/upload", port))
         .body(reqwest::Body::wrap_stream(reader))
         .query(&[("name", name.unwrap_or(file))])
         .header("Content-Length", full_size as u64)
@@ -307,7 +307,7 @@ async fn main_result() -> Result<(), Error> {
     Action::Resource(ResourceAction::Down { id, file }) => {
       let (client, host, port) = make_authenticated_client()?;
       let response = client
-        .get(format!("https://hujingzhi:{}/download", port))
+        .get(format!("https://launcho:{}/download", port))
         .query(&[("id", id)])
         .send()
         .await
@@ -333,12 +333,12 @@ async fn main_result() -> Result<(), Error> {
     }
     Action::Resource(ResourceAction::Rm { ids }) => {
       handle_success_or_error(
-        hujingzhi::send_request(hujingzhi::ClientRequest::DeleteResources { ids }).await?,
+        launcho::send_request(launcho::ClientRequest::DeleteResources { ids }).await?,
       );
     }
     Action::Resource(ResourceAction::Ls) => {
       let response = handle_error_response(
-        hujingzhi::send_request(hujingzhi::ClientRequest::ListResources).await?,
+        launcho::send_request(launcho::ClientRequest::ListResources).await?,
       );
       match response {
         ClientResponse::ResourceList { resources } => {
@@ -352,11 +352,11 @@ async fn main_result() -> Result<(), Error> {
     }
     Action::Uncommon(UncommonAction::ClearLaunchRateLimits) => {
       handle_success_or_error(
-        hujingzhi::send_request(hujingzhi::ClientRequest::ClearLaunchRateLimits).await?,
+        launcho::send_request(launcho::ClientRequest::ClearLaunchRateLimits).await?,
       );
     }
     Action::Uncommon(UncommonAction::Ping) => {
-      let pong = hujingzhi::send_request(hujingzhi::ClientRequest::Ping).await?;
+      let pong = launcho::send_request(launcho::ClientRequest::Ping).await?;
       println!("{:#?}", pong);
     }
   })
