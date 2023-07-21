@@ -103,7 +103,7 @@ fn handle_success_or_error(response: ClientResponse) {
 }
 
 fn progress_bar(prefix: &str, bytes: f64, full_size: f64) {
-  print!(
+  eprint!(
     "\r{} {:.2}% ({:.2} / {:.2} MiB)",
     prefix,
     100.0 * bytes / full_size,
@@ -301,8 +301,16 @@ async fn main_result() -> Result<(), Error> {
         .with_context(|| format!("Upload to {} failed", host))?
         .text()
         .await?;
-      println!(" Done.");
-      handle_success_or_error(serde_json::from_str(&response)?);
+      eprintln!(" Done.");
+      match serde_json::from_str(&response)? {
+        ClientResponse::Success { message: None } =>
+          eprintln!("Success, but no resource ID returned, for some reason"),
+        ClientResponse::Success {
+          message: Some(message),
+        } => println!("{}", message),
+        _ => panic!("Unexpected response: {:?}", response),
+      }
+      ()
     }
     Action::Resource(ResourceAction::Down { id, file }) => {
       let (client, host, port) = make_authenticated_client()?;
@@ -329,7 +337,7 @@ async fn main_result() -> Result<(), Error> {
         progress_bar("Downloading:", bytes_written as f64, full_size as f64);
         file.write_all(&chunk)?;
       }
-      println!(" Done.");
+      eprintln!(" Done.");
     }
     Action::Resource(ResourceAction::Rm { ids }) => {
       handle_success_or_error(
