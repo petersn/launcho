@@ -152,12 +152,12 @@ pub fn delete_extra_secrets(secrets: &mut Secrets, keys: &[String]) -> Result<St
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct HujingzhiConfig {
+pub struct LaunchoConfig {
   pub server:  ServerSpec,
   pub secrets: SecretsSpec,
 }
 
-impl HujingzhiConfig {
+impl LaunchoConfig {
   pub fn apply_secrets(&mut self, secrets: &Secrets) -> Result<(), Error> {
     self.server.apply_secrets(secrets)?;
     Ok(())
@@ -290,12 +290,12 @@ impl ServiceSpec {
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct HujingzhiTarget {
+pub struct LaunchoTarget {
   pub services:  Vec<ServiceSpec>,
   pub processes: Vec<ProcessSpec>,
 }
 
-impl HujingzhiTarget {
+impl LaunchoTarget {
   pub fn apply_secrets(&mut self, secrets: &Secrets) -> Result<(), Error> {
     for process in &mut self.processes {
       process.apply_secrets(secrets)?;

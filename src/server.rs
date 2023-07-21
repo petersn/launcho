@@ -15,10 +15,10 @@ use warp::Filter;
 
 use crate::{
   config::{
-    delete_extra_secrets, insert_and_save_secret, AuthConfig, HujingzhiConfig, HujingzhiTarget,
+    delete_extra_secrets, insert_and_save_secret, AuthConfig, LaunchoConfig, LaunchoTarget,
     ProcessSpec, Secrets, ServiceSpec,
   },
-  get_auth_config, get_target, get_target_path, guarantee_hjz_directory, storage, ClientRequest,
+  get_auth_config, get_target, get_target_path, guarantee_lcho_directory, storage, ClientRequest,
   ClientResponse, LogEvent, ProcessStatus,
 };
 use crate::{ipvs, GetAuthConfigMode};
@@ -307,7 +307,7 @@ struct AppliedIpvsService {
 struct SyncedGlobalState {
   secrets:             Secrets,
   target_text:         String,
-  target:              HujingzhiTarget,
+  target:              LaunchoTarget,
   clean_services:      HashSet<AppliedIpvsService>,
   processes_by_name:   HashMap<String, ProcessSet>,
   free_loopback_ports: VecDeque<u16>,
@@ -352,9 +352,9 @@ struct GlobalState {
 
 impl GlobalState {
   fn new(
-    config: HujingzhiConfig,
+    config: LaunchoConfig,
     target_text: String,
-    target: HujingzhiTarget,
+    target: LaunchoTarget,
     secrets: Secrets,
   ) -> Self {
     let mut free_loopback_ports = VecDeque::new();
@@ -373,7 +373,7 @@ impl GlobalState {
         log_event(LogEvent::Warning {
           msg: format!("Ignoring stored target, as it is invalid: {}", e),
         });
-        HujingzhiTarget::default()
+        LaunchoTarget::default()
       }
     };
     let this = Self {
@@ -422,9 +422,9 @@ impl GlobalState {
       Some(cwd) => PathBuf::from(cwd),
       None => {
         // FIXME: Clean this stuff up.
-        crate::already_exists_ok(std::fs::create_dir(&"/tmp/hjz-procs"))?;
+        crate::already_exists_ok(std::fs::create_dir(&"/tmp/lcho-procs"))?;
         let nonce: u64 = rand::random();
-        let path = format!("/tmp/hjz-procs/tmp-{:x}", nonce);
+        let path = format!("/tmp/lcho-procs/tmp-{:x}", nonce);
         crate::already_exists_ok(std::fs::create_dir(&path))?;
         command.current_dir(&path);
         PathBuf::from(path)
@@ -792,7 +792,7 @@ impl GlobalState {
     result
   }
 
-  fn validate_target(target: &HujingzhiTarget) -> Result<(), Error> {
+  fn validate_target(target: &LaunchoTarget) -> Result<(), Error> {
     // Make sure all process and service names are unique.
     macro_rules! check_unique {
       ($field_name:literal, $name:expr) => {{
@@ -829,7 +829,7 @@ impl GlobalState {
     &self,
     synced: &mut TokioMutexGuard<'_, SyncedGlobalState>,
     new_target_text: String,
-    new_target: HujingzhiTarget,
+    new_target: LaunchoTarget,
   ) -> Result<(), Error> {
     // We delete every service that no longer exists.
     // The above code will take care of creating new ones.
@@ -874,7 +874,7 @@ impl GlobalState {
     &self,
     synced: &mut TokioMutexGuard<'_, SyncedGlobalState>,
   ) -> Result<bool, Error> {
-    let mut new_target: HujingzhiTarget = serde_yaml::from_str(&synced.target_text)?;
+    let mut new_target: LaunchoTarget = serde_yaml::from_str(&synced.target_text)?;
     new_target.apply_secrets(&synced.secrets)?;
     Self::validate_target(&new_target)?;
     if new_target != synced.target {
@@ -898,7 +898,7 @@ impl GlobalState {
         target: target_text,
       } => {
         let mut synced = self.synced.lock().await;
-        let mut target: HujingzhiTarget = serde_yaml::from_str(&target_text)?;
+        let mut target: LaunchoTarget = serde_yaml::from_str(&target_text)?;
         target.apply_secrets(&synced.secrets)?;
         Self::validate_target(&target)?;
         std::fs::write(get_target_path()?, &target_text)?;
@@ -1051,8 +1051,8 @@ impl GlobalState {
   }
 }
 
-pub async fn server_main(mut config: HujingzhiConfig) -> Result<(), Error> {
-  guarantee_hjz_directory()?;
+pub async fn server_main(mut config: LaunchoConfig) -> Result<(), Error> {
+  guarantee_lcho_directory()?;
 
   let secrets = config.secrets.load()?;
   config.apply_secrets(&secrets)?;

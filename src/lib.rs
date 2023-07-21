@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use anyhow::{bail, Context, Error};
 use serde::{Deserialize, Serialize};
 
-use crate::config::{AuthConfig, HujingzhiTarget, ServiceSpec};
+use crate::config::{AuthConfig, LaunchoTarget, ServiceSpec};
 use crate::ipvs::IpvsState;
 
 fn make_cryptographic_token() -> String {
@@ -136,9 +136,9 @@ pub enum GetAuthConfigMode {
   Client,
 }
 
-pub fn get_hjz_directory() -> Result<PathBuf, Error> {
+pub fn get_lcho_directory() -> Result<PathBuf, Error> {
   let home = std::env::var_os("HOME").context("HOME environment variable not set")?;
-  Ok(PathBuf::from(home).join(".hjz"))
+  Ok(PathBuf::from(home).join(".lcho"))
 }
 
 pub fn already_exists_ok(result: std::io::Result<()>) -> std::io::Result<()> {
@@ -149,21 +149,21 @@ pub fn already_exists_ok(result: std::io::Result<()>) -> std::io::Result<()> {
   }
 }
 
-pub fn guarantee_hjz_directory() -> Result<(), Error> {
-  let hjz_dir = get_hjz_directory()?;
-  already_exists_ok(std::fs::create_dir(&hjz_dir))?;
-  already_exists_ok(std::fs::create_dir(hjz_dir.join("storage")))?;
+pub fn guarantee_lcho_directory() -> Result<(), Error> {
+  let lcho_dir = get_lcho_directory()?;
+  already_exists_ok(std::fs::create_dir(&lcho_dir))?;
+  already_exists_ok(std::fs::create_dir(lcho_dir.join("storage")))?;
   Ok(())
 }
 
 pub fn get_auth_config(mode: GetAuthConfigMode) -> Result<AuthConfig, Error> {
   let config_path_suffix = match mode {
     GetAuthConfigMode::ServerCreateIfNotExists | GetAuthConfigMode::ServerFailIfNotExists =>
-      "hjz-server-auth.yaml",
-    GetAuthConfigMode::Client => "hjz-client-auth.yaml",
+      "lcho-server-auth.yaml",
+    GetAuthConfigMode::Client => "lcho-client-auth.yaml",
   };
-  let hjz_dir = get_hjz_directory()?;
-  let config_path = hjz_dir.join(config_path_suffix);
+  let lcho_dir = get_lcho_directory()?;
+  let config_path = lcho_dir.join(config_path_suffix);
   if let Ok(auth_config_string) = std::fs::read_to_string(&config_path) {
     let auth_config: AuthConfig = serde_yaml::from_str(&auth_config_string)?;
     return Ok(auth_config);
@@ -172,14 +172,14 @@ pub fn get_auth_config(mode: GetAuthConfigMode) -> Result<AuthConfig, Error> {
     GetAuthConfigMode::ServerFailIfNotExists =>
       bail!("Auth info not found at {:?}\nStart the server to create the auth.", config_path),
     GetAuthConfigMode::Client =>
-      bail!("Auth info not found at {:?}\nOn the server run `hjz print-auth`, and paste the result into a file at {:?}", config_path, config_path),
+      bail!("Auth info not found at {:?}\nOn the server run `lcho print-auth`, and paste the result into a file at {:?}", config_path, config_path),
     GetAuthConfigMode::ServerCreateIfNotExists => {},
   }
   #[cfg(target_os = "linux")]
   server::log_event(LogEvent::Warning {
     msg: format!("Auth file not found at {:?} -- generating a new one", config_path),
   });
-  let subject_alt_names = vec!["hujingzhi".to_string()];
+  let subject_alt_names = vec!["launcho".to_string()];
   let cert = rcgen::generate_simple_self_signed(subject_alt_names)?;
   let auth_config = AuthConfig {
     host:    None,
@@ -188,27 +188,27 @@ pub fn get_auth_config(mode: GetAuthConfigMode) -> Result<AuthConfig, Error> {
     token:   make_cryptographic_token(),
   };
   let auth_config_yaml = serde_yaml::to_string(&auth_config)?;
-  guarantee_hjz_directory()?;
+  guarantee_lcho_directory()?;
   std::fs::write(config_path, &auth_config_yaml)?;
   Ok(auth_config)
 }
 
 pub fn get_config_path() -> Result<PathBuf, Error> {
-  let hjz_dir = get_hjz_directory()?;
-  Ok(hjz_dir.join("hjz-config.yaml"))
+  let lcho_dir = get_lcho_directory()?;
+  Ok(lcho_dir.join("lcho-config.yaml"))
 }
 
 pub fn get_target_path() -> Result<PathBuf, Error> {
-  let hjz_dir = get_hjz_directory()?;
-  Ok(hjz_dir.join("hjz-target.yaml"))
+  let lcho_dir = get_lcho_directory()?;
+  Ok(lcho_dir.join("lcho-target.yaml"))
 }
 
 pub fn get_extra_secrets_path() -> Result<PathBuf, Error> {
-  let hjz_dir = get_hjz_directory()?;
-  Ok(hjz_dir.join("hjz-extra-secrets.yaml"))
+  let lcho_dir = get_lcho_directory()?;
+  Ok(lcho_dir.join("lcho-extra-secrets.yaml"))
 }
 
-pub fn get_target() -> Result<(String, HujingzhiTarget), Error> {
+pub fn get_target() -> Result<(String, LaunchoTarget), Error> {
   let target_text = match std::fs::read_to_string(get_target_path()?) {
     Ok(target_text) => target_text,
     // Check just for file-not-found errors.
@@ -244,7 +244,7 @@ pub fn make_authenticated_client() -> Result<(reqwest::Client, String, u16), Err
   let client = reqwest::Client::builder()
     .https_only(true)
     .add_root_certificate(reqwest::Certificate::from_pem(auth_config.cert.as_bytes())?)
-    .resolve_to_addrs("hujingzhi", &addrs)
+    .resolve_to_addrs("launcho", &addrs)
     .default_headers(headers)
     .build()?;
   Ok((client, host.to_string(), port))
@@ -253,7 +253,7 @@ pub fn make_authenticated_client() -> Result<(reqwest::Client, String, u16), Err
 pub async fn send_request(request: ClientRequest) -> Result<ClientResponse, Error> {
   let (client, host, port) = make_authenticated_client()?;
   let response = client
-    .post(format!("https://hujingzhi:{}/api", port))
+    .post(format!("https://launcho:{}/api", port))
     .json(&request)
     .send()
     .await
