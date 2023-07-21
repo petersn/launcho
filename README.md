@@ -190,5 +190,7 @@ launcho secret set BUNDLE_RESOURCE_ID $(cat NEW_RESOURCE_ID)
 This would cause a new version of the server to launch.
 All traffic to port 5000 will then be rerouted from the old version to the new version once the new version passes a health check, and then the old version will be killed.
 
+You can check up on the server with `launcho status`, and get its logs via `launcho logs PROCESS_RANDOM_NAME`.
+
 The assumption is that generally you'll point some sort of TLS-handling reverse proxy at your services (for example, maybe you point nginx at 127.0.0.1:5000, and leave nginx outside of the purview of launcho, but that's not mandatory, of course).
 
