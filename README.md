@@ -113,7 +113,7 @@ Each process will get an environment variable with a name like `SERVICE_PORT_SER
 
 You can list/upload/download/delete resources with:
 ```
-launcho resource ls          # or launcho l ls
+launcho resource ls          # or launcho r ls
 launcho resource up FILE     # ... and so on
 launcho resource down RESOURCE_ID OUTPUT_FILE
 launcho resource rm RESOURCE_ID RESOURCE_ID...
