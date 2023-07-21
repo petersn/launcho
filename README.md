@@ -182,7 +182,7 @@ services:
 ```
 
 Then to deploy a new version you need merely do:
-```
+```bash
 # Assuming bundle/server.js contains the above server...
 tar -cvvhjf bundle.tar.bz2 bundle/
 launcho resource up bundle.tar.bz2 | tee NEW_RESOURCE_ID
