@@ -424,7 +424,7 @@ impl GlobalState {
         // FIXME: Clean this stuff up.
         crate::already_exists_ok(std::fs::create_dir(&"/tmp/launcho-procs"))?;
         let nonce: u64 = rand::random();
-        let path = format!("/tmp/launcho-procs/tmp-{:x}", nonce);
+        let path = format!("/tmp/launcho-procs/tmp-{:016x}", nonce);
         crate::already_exists_ok(std::fs::create_dir(&path))?;
         command.current_dir(&path);
         PathBuf::from(path)
