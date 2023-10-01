@@ -13,10 +13,7 @@ This is all written in ~2k lines of Rust.
 ## Setting up launcho
 
 ```bash
-git clone https://github.com/petersn/launcho
-cd launcho
-cargo build --release
-cp target/release/launcho /wherever/you/put/binaries
+cargo install launcho
 ```
 
 On the server do:
