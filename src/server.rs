@@ -25,7 +25,7 @@ use crate::{ipvs, GetAuthConfigMode};
 
 static SERVICE_IP_PREFIX: &str = "127.0.0.";
 static HOUSEKEEPING_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
-static CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+static CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 
 // FIXME: These rate limits can only be evaluated in increments of the housekeeping interval.
 static START_RATE_LIMIT: &RateLimit = &RateLimit {
@@ -692,28 +692,31 @@ impl GlobalState {
           }
         }
       }
-      // If there's a newer running version, then sunset the older running versions.
-      let mut have_newer_running_version = false;
+      // If there's a newer version that's at a strictly higher level
+      // of functionality, then sunset the older running versions.
+      let mut best_goodness = 0;
       for i in (0..process_set.running_versions.len()).rev() {
         let (_, entry) = &mut process_set.running_versions[i];
-        if matches!(
-          entry.status,
-          ProcessStatus::Starting | ProcessStatus::Running | ProcessStatus::Unhealthy
-        ) {
-          if have_newer_running_version {
-            update_status!(entry, ProcessStatus::Sunsetting);
-            // When doing so, send a SIGINT to the process.
-            match entry.process.id() {
-              Some(pid) => unsafe {
-                libc::kill(pid as i32, libc::SIGTERM);
-              },
-              None => log_event(LogEvent::Error {
-                msg: format!("Failed to send SIGTERM to {}: no PID available", entry.name),
-              }),
-            }
+        let goodness = match entry.status {
+          // I'm not sure, which value is better, unheathy, or starting?
+          ProcessStatus::Unhealthy => 1,
+          ProcessStatus::Starting => 2,
+          ProcessStatus::Running => 3,
+          _ => continue,
+        };
+        if goodness < best_goodness {
+          update_status!(entry, ProcessStatus::Sunsetting);
+          // When doing so, send a SIGINT to the process.
+          match entry.process.id() {
+            Some(pid) => unsafe {
+              libc::kill(pid as i32, libc::SIGTERM);
+            },
+            None => log_event(LogEvent::Error {
+              msg: format!("Failed to send SIGTERM to {}: no PID available", entry.name),
+            }),
           }
-          have_newer_running_version = true;
         }
+        best_goodness = best_goodness.max(goodness);
       }
       // If a process has exited, then set it to exited.
       for (_, entry) in &mut process_set.running_versions {
