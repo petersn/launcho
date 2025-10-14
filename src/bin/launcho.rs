@@ -250,7 +250,6 @@ async fn main_result() -> Result<(), Error> {
       }
     }
     Action::Status { ipvs, all } => {
-      println!("Events:");
       let response =
         handle_error_response(launcho::send_request(args.which, launcho::ClientRequest::Status { all }).await?);
       match response {
