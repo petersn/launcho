@@ -12,7 +12,7 @@ use launcho::{
 #[clap(author, version, about, long_about = None)]
 struct Args {
   /// Pick which configuration file to load
-  #[clap(long)]
+  #[clap(long, short)]
   which: Option<String>,
 
   #[clap(subcommand)]
