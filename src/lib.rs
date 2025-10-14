@@ -1,3 +1,5 @@
+#![feature(vec_deque_truncate_front)]
+
 pub mod config;
 pub mod ipvs;
 #[cfg(target_os = "linux")]

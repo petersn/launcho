@@ -219,7 +219,7 @@ struct SpooledOutput {
 impl SpooledOutput {
   fn new(stdout: ChildStdout, stderr: ChildStderr) -> Arc<Self> {
     let this = Arc::new(Self {
-      buffer: Mutex::new(Vec::new()),
+      buffer: Mutex::new(VecDeque::new()),
     });
 
     fn launch<T>(this: Arc<SpooledOutput>, mut reader: T)
@@ -235,7 +235,7 @@ impl SpooledOutput {
             break;
           }
           let mut guard = this.buffer.lock().unwrap();
-          guard.extend_from_slice(&buf[..n]);
+          guard.extend(&buf[..n]);
           guard.truncate_front(MAX_LOG_SPOOL_LENGTH);
           std::mem::drop(guard);
         }
@@ -248,8 +248,8 @@ impl SpooledOutput {
   }
 
   fn get(&self) -> String {
-    let guard = self.buffer.lock().unwrap();
-    String::from_utf8_lossy(&guard).to_string()
+    let mut guard = self.buffer.lock().unwrap();
+    String::from_utf8_lossy(guard.make_contiguous()).to_string()
   }
 }
 
@@ -1078,7 +1078,7 @@ pub async fn server_main(mut config: LaunchoConfig) -> Result<(), Error> {
   let warp_global_state = warp::any().map(move || global_state);
 
   let auth_config: &'static AuthConfig =
-    Box::leak(Box::new(get_auth_config(GetAuthConfigMode::ServerCreateIfNotExists)?));
+    Box::leak(Box::new(get_auth_config(None, GetAuthConfigMode::ServerCreateIfNotExists)?));
 
   #[derive(Debug)]
   struct MessageAndStatus(&'static str, warp::http::StatusCode);
