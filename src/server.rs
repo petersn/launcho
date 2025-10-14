@@ -978,7 +978,7 @@ impl GlobalState {
           if subslice.len() != rv.len() {
             println!("  ... {} omitted (--all to show)", rv.len() - subslice.len());
           }
-          for (_, entry) in &subslice {
+          for (_, entry) in subslice {
             let duration = match entry.status {
               ProcessStatus::Exited { approx_time, .. } =>
                 std::time::Duration::from_secs(get_unix_time() - approx_time),
