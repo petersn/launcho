@@ -11,6 +11,10 @@ use launcho::{
 #[derive(Debug, Parser)]
 #[clap(author, version, about, long_about = None)]
 struct Args {
+  /// Pick which configuration file to load
+  #[clap(long)]
+  which: Option<String>,
+
   #[clap(subcommand)]
   action: Action,
 }
@@ -121,7 +125,7 @@ async fn main_result() -> Result<(), Error> {
       println!("launcho {}", env!("CARGO_PKG_VERSION"));
     }
     Action::PrintAuth => {
-      let mut auth_config = launcho::get_auth_config(None, GetAuthConfigMode::ServerFailIfNotExists)?;
+      let mut auth_config = launcho::get_auth_config(args.which, GetAuthConfigMode::ServerFailIfNotExists)?;
       auth_config.host = Some("change-me-to-point-to-the-server.example.com:12888".to_string());
       auth_config.private = None;
       println!("# Paste this into ~/.launcho/launcho-client-auth.yaml on the client machine");
@@ -165,7 +169,7 @@ async fn main_result() -> Result<(), Error> {
     }
     Action::Target(TargetAction::Get) => {
       let response =
-        handle_error_response(launcho::send_request(launcho::ClientRequest::GetTarget).await?);
+        handle_error_response(launcho::send_request(args.which, launcho::ClientRequest::GetTarget).await?);
       match response {
         ClientResponse::Target { target } => print!("{}", target),
         _ => panic!("Unexpected response: {:?}", response),
@@ -173,7 +177,7 @@ async fn main_result() -> Result<(), Error> {
     }
     Action::Target(TargetAction::Set { file }) => {
       handle_success_or_error(
-        launcho::send_request(launcho::ClientRequest::SetTarget {
+        launcho::send_request(args.which, launcho::ClientRequest::SetTarget {
           target: std::fs::read_to_string(&file)?,
         })
         .await?,
@@ -181,7 +185,7 @@ async fn main_result() -> Result<(), Error> {
     }
     Action::Target(TargetAction::Edit) => {
       let response =
-        handle_error_response(launcho::send_request(launcho::ClientRequest::GetTarget).await?);
+        handle_error_response(launcho::send_request(args.which.clone(), launcho::ClientRequest::GetTarget).await?);
       let target = match response {
         ClientResponse::Target { target } => target,
         _ => panic!("Unexpected response: {:?}", response),
@@ -191,14 +195,14 @@ async fn main_result() -> Result<(), Error> {
         println!("No changes -- not updating");
       } else {
         handle_success_or_error(
-          launcho::send_request(launcho::ClientRequest::SetTarget { target: new_target })
+          launcho::send_request(args.which, launcho::ClientRequest::SetTarget { target: new_target })
             .await?,
         );
       }
     }
     Action::Secret(SecretAction::Get { names }) => {
       let response = handle_error_response(
-        launcho::send_request(launcho::ClientRequest::GetSecrets { names }).await?,
+        launcho::send_request(args.which, launcho::ClientRequest::GetSecrets { names }).await?,
       );
       match response {
         ClientResponse::Secrets { secrets } =>
@@ -214,12 +218,12 @@ async fn main_result() -> Result<(), Error> {
     }
     Action::Secret(SecretAction::Set { name, value }) => {
       handle_success_or_error(
-        launcho::send_request(launcho::ClientRequest::SetSecret { name, value }).await?,
+        launcho::send_request(args.which, launcho::ClientRequest::SetSecret { name, value }).await?,
       );
     }
     Action::Secret(SecretAction::Rm { names }) => {
       let response = handle_error_response(
-        launcho::send_request(launcho::ClientRequest::DeleteSecrets { names }).await?,
+        launcho::send_request(args.which, launcho::ClientRequest::DeleteSecrets { names }).await?,
       );
       match response {
         ClientResponse::Success {
@@ -232,7 +236,7 @@ async fn main_result() -> Result<(), Error> {
     }
     Action::Secret(SecretAction::Ls) => {
       let response = handle_error_response(
-        launcho::send_request(launcho::ClientRequest::ListSecrets).await?,
+        launcho::send_request(args.which, launcho::ClientRequest::ListSecrets).await?,
       );
       match response {
         ClientResponse::SecretList { secrets } =>
@@ -245,7 +249,7 @@ async fn main_result() -> Result<(), Error> {
     Action::Status { ipvs } => {
       println!("Events:");
       let response =
-        handle_error_response(launcho::send_request(launcho::ClientRequest::Status).await?);
+        handle_error_response(launcho::send_request(args.which, launcho::ClientRequest::Status).await?);
       match response {
         ClientResponse::Status {
           status,
@@ -266,7 +270,7 @@ async fn main_result() -> Result<(), Error> {
     }
     Action::Logs { process } => {
       let response = handle_error_response(
-        launcho::send_request(launcho::ClientRequest::GetLogs { name: process }).await?,
+        launcho::send_request(args.which, launcho::ClientRequest::GetLogs { name: process }).await?,
       );
       match response {
         ClientResponse::Logs { name, output } => {
@@ -278,7 +282,7 @@ async fn main_result() -> Result<(), Error> {
     }
     Action::RestartProcess { process } => {
       handle_success_or_error(
-        launcho::send_request(launcho::ClientRequest::Restart { name: process }).await?,
+        launcho::send_request(args.which, launcho::ClientRequest::Restart { name: process }).await?,
       );
     }
     Action::Resource(ResourceAction::Up { name, file }) => {
@@ -290,7 +294,7 @@ async fn main_result() -> Result<(), Error> {
           progress_bar("Uploading:", bytes_written as f64, full_size as f64);
           x
         });
-      let (client, host, port) = make_authenticated_client()?;
+      let (client, host, port) = make_authenticated_client(args.which)?;
       let response = client
         .post(format!("https://launcho:{}/upload", port))
         .body(reqwest::Body::wrap_stream(reader))
@@ -313,7 +317,7 @@ async fn main_result() -> Result<(), Error> {
       ()
     }
     Action::Resource(ResourceAction::Down { id, file }) => {
-      let (client, host, port) = make_authenticated_client()?;
+      let (client, host, port) = make_authenticated_client(args.which)?;
       let response = client
         .get(format!("https://launcho:{}/download", port))
         .query(&[("id", id)])
@@ -341,12 +345,12 @@ async fn main_result() -> Result<(), Error> {
     }
     Action::Resource(ResourceAction::Rm { ids }) => {
       handle_success_or_error(
-        launcho::send_request(launcho::ClientRequest::DeleteResources { ids }).await?,
+        launcho::send_request(args.which, launcho::ClientRequest::DeleteResources { ids }).await?,
       );
     }
     Action::Resource(ResourceAction::Ls) => {
       let response = handle_error_response(
-        launcho::send_request(launcho::ClientRequest::ListResources).await?,
+        launcho::send_request(args.which, launcho::ClientRequest::ListResources).await?,
       );
       match response {
         ClientResponse::ResourceList { resources } => {
@@ -360,11 +364,11 @@ async fn main_result() -> Result<(), Error> {
     }
     Action::Uncommon(UncommonAction::ClearLaunchRateLimits) => {
       handle_success_or_error(
-        launcho::send_request(launcho::ClientRequest::ClearLaunchRateLimits).await?,
+        launcho::send_request(args.which, launcho::ClientRequest::ClearLaunchRateLimits).await?,
       );
     }
     Action::Uncommon(UncommonAction::Ping) => {
-      let pong = launcho::send_request(launcho::ClientRequest::Ping).await?;
+      let pong = launcho::send_request(args.which, launcho::ClientRequest::Ping).await?;
       println!("{:#?}", pong);
     }
   })

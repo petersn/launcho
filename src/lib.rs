@@ -159,13 +159,14 @@ pub fn guarantee_launcho_directory() -> Result<(), Error> {
 }
 
 pub fn get_auth_config(prefix: Option<String>, mode: GetAuthConfigMode) -> Result<AuthConfig, Error> {
+  let prefix = prefix.map(|s| format!("{}-", s)).unwrap_or_default();
   let config_path_suffix = match mode {
     GetAuthConfigMode::ServerCreateIfNotExists | GetAuthConfigMode::ServerFailIfNotExists =>
       "launcho-server-auth.yaml",
     GetAuthConfigMode::Client => "launcho-client-auth.yaml",
   };
   let launcho_dir = get_launcho_directory()?;
-  let config_path = launcho_dir.join(config_path_suffix);
+  let config_path = launcho_dir.join(format!("{}{}", prefix, config_path_suffix));
   if let Ok(auth_config_string) = std::fs::read_to_string(&config_path) {
     let auth_config: AuthConfig = serde_yaml::from_str(&auth_config_string)?;
     return Ok(auth_config);
@@ -173,8 +174,33 @@ pub fn get_auth_config(prefix: Option<String>, mode: GetAuthConfigMode) -> Resul
   match mode {
     GetAuthConfigMode::ServerFailIfNotExists =>
       bail!("Auth info not found at {:?}\nStart the server to create the auth.", config_path),
-    GetAuthConfigMode::Client =>
-      bail!("Auth info not found at {:?}\nOn the server run `launcho print-auth`, and paste the result into a file at {:?}", config_path, config_path),
+    GetAuthConfigMode::Client => {
+      let mut msg = format!(
+        "Auth info not found at {:?}\nOn the server run `launcho print-auth`, and paste the result into a file at {:?}",
+        config_path, config_path,
+      );
+      let mut candidates = Vec::new();
+      if let Ok(entries) = std::fs::read_dir(&launcho_dir) {
+        for entry in entries.flatten() {
+          if let Some(name) = entry.file_name().to_str() {
+            // Look for files like "something-<config_path_suffix>"
+            if name.ends_with(&config_path_suffix) && name != config_path_suffix {
+              if let Some(prefix_candidate) = name.strip_suffix(&config_path_suffix) {
+                let prefix_candidate = prefix_candidate.strip_suffix('-').unwrap_or(prefix_candidate);
+                candidates.push((prefix_candidate.to_string(), entry.path()));
+              }
+            }
+          }
+        }
+      }
+      if !candidates.is_empty() {
+        msg.push_str(&format!("\n\nHowever, some config files were found that you can select with:\n"));
+        for (candidate, name) in candidates {
+          msg.push_str(&format!("  --which {}\n      (to use the config file found at {:?})\n", candidate, name));
+        }
+      }
+      bail!(msg);
+    }
     GetAuthConfigMode::ServerCreateIfNotExists => {},
   }
   #[cfg(target_os = "linux")]
@@ -222,13 +248,13 @@ pub fn get_target() -> Result<(String, LaunchoTarget), Error> {
   Ok((target_text, target))
 }
 
-pub fn make_authenticated_client() -> Result<(reqwest::Client, String, u16), Error> {
+pub fn make_authenticated_client(prefix: Option<String>) -> Result<(reqwest::Client, String, u16), Error> {
   use std::net::ToSocketAddrs;
 
   use base64::{engine::general_purpose, Engine};
   use reqwest::header;
 
-  let auth_config = get_auth_config(None, GetAuthConfigMode::Client)?;
+  let auth_config = get_auth_config(prefix, GetAuthConfigMode::Client)?;
   let host = auth_config.host.as_ref().unwrap();
   let (_, port) = ipvs::parse_host_and_port(host)?;
   let addrs: Vec<_> = host
@@ -252,8 +278,8 @@ pub fn make_authenticated_client() -> Result<(reqwest::Client, String, u16), Err
   Ok((client, host.to_string(), port))
 }
 
-pub async fn send_request(request: ClientRequest) -> Result<ClientResponse, Error> {
-  let (client, host, port) = make_authenticated_client()?;
+pub async fn send_request(prefix: Option<String>, request: ClientRequest) -> Result<ClientResponse, Error> {
+  let (client, host, port) = make_authenticated_client(prefix)?;
   let response = client
     .post(format!("https://launcho:{}/api", port))
     .json(&request)
