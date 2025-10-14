@@ -86,7 +86,7 @@ pub enum ClientRequest {
   SetSecret { name: String, value: String },
   DeleteSecrets { names: Vec<String> },
   ListSecrets,
-  Status,
+  Status { all: bool },
   GetLogs { name: String },
   Restart { name: String },
   DeleteResources { ids: Vec<String> },

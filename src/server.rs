@@ -965,12 +965,20 @@ impl GlobalState {
           secrets: synced.secrets.0.keys().cloned().collect(),
         }
       }
-      ClientRequest::Status => {
+      ClientRequest::Status { all } => {
         let synced = self.synced.lock().await;
         let mut formatted_status = String::new();
         for (process_name, process_set) in &synced.processes_by_name {
           formatted_status.push_str(&format!("{}:\n", process_name));
-          for (_, entry) in &process_set.running_versions {
+          let rv = &process_set.running_versions;
+          let subslice = match all {
+            true => &rv[..],
+            false => &rv[rv.len().saturating_sub(5)..],
+          };
+          if subslice.len() != rv.len() {
+            println!("  ... {} omitted (--all to show)", rv.len() - subslice.len());
+          }
+          for (_, entry) in &subslice {
             let duration = match entry.status {
               ProcessStatus::Exited { approx_time, .. } =>
                 std::time::Duration::from_secs(get_unix_time() - approx_time),

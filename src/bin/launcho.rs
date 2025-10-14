@@ -35,6 +35,9 @@ enum Action {
   Status {
     #[clap(long, action)]
     ipvs: bool,
+
+    #[clap(long, short)]
+    all: bool,
   },
   Logs {
     process: String,
@@ -246,23 +249,32 @@ async fn main_result() -> Result<(), Error> {
         _ => panic!("Unexpected response: {:?}", response),
       }
     }
-    Action::Status { ipvs } => {
+    Action::Status { ipvs, all } => {
       println!("Events:");
       let response =
-        handle_error_response(launcho::send_request(args.which, launcho::ClientRequest::Status).await?);
+        handle_error_response(launcho::send_request(args.which, launcho::ClientRequest::Status { all }).await?);
       match response {
         ClientResponse::Status {
           status,
           events,
           ipvs_state,
         } => {
-          for event in events {
+          println!("\x1b[93m=== Events:\x1b[0m");
+          let events_subslice = match all {
+            true => &events[..],
+            false => &events[events.len().saturating_sub(5)..],
+          };
+          if events_subslice.len() != events.len() {
+            println!("  ... {} omitted (--all to show)", events.len() - events_subslice.len());
+          }
+          for event in events_subslice {
             println!("  {:?}", event);
           }
           if ipvs {
-            println!("IPVS:");
+            println!("\x1b[93m=== IPVS state:\x1b[0m");
             println!("{:#?}", ipvs_state);
           }
+          println!("\x1b[93m=== Processes:\x1b[0m");
           println!("{}", status)
         }
         _ => panic!("Unexpected response: {:?}", response),
