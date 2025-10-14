@@ -704,7 +704,7 @@ impl GlobalState {
           ProcessStatus::Running => 3,
           _ => continue,
         };
-        if goodness < best_goodness {
+        if goodness <= best_goodness {
           update_status!(entry, ProcessStatus::Sunsetting);
           // When doing so, send a SIGINT to the process.
           match entry.process.id() {
