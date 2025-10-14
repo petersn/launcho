@@ -966,6 +966,7 @@ impl GlobalState {
         }
       }
       ClientRequest::Status { all } => {
+        // FIXME: Replace all of these push_str(&format!(...)) with write! and writeln!
         let synced = self.synced.lock().await;
         let mut formatted_status = String::new();
         for (process_name, process_set) in &synced.processes_by_name {
@@ -976,7 +977,7 @@ impl GlobalState {
             false => &rv[rv.len().saturating_sub(5)..],
           };
           if subslice.len() != rv.len() {
-            println!("  ... {} omitted (--all to show)", rv.len() - subslice.len());
+            formatted_status.push_str(&format!("  ... {} omitted (--all to show)", rv.len() - subslice.len()));
           }
           for (_, entry) in subslice {
             let duration = match entry.status {
