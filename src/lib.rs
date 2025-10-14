@@ -156,7 +156,7 @@ pub fn guarantee_launcho_directory() -> Result<(), Error> {
   Ok(())
 }
 
-pub fn get_auth_config(mode: GetAuthConfigMode) -> Result<AuthConfig, Error> {
+pub fn get_auth_config(prefix: Option<String>, mode: GetAuthConfigMode) -> Result<AuthConfig, Error> {
   let config_path_suffix = match mode {
     GetAuthConfigMode::ServerCreateIfNotExists | GetAuthConfigMode::ServerFailIfNotExists =>
       "launcho-server-auth.yaml",
@@ -226,7 +226,7 @@ pub fn make_authenticated_client() -> Result<(reqwest::Client, String, u16), Err
   use base64::{engine::general_purpose, Engine};
   use reqwest::header;
 
-  let auth_config = get_auth_config(GetAuthConfigMode::Client)?;
+  let auth_config = get_auth_config(None, GetAuthConfigMode::Client)?;
   let host = auth_config.host.as_ref().unwrap();
   let (_, port) = ipvs::parse_host_and_port(host)?;
   let addrs: Vec<_> = host

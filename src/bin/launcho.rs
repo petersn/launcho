@@ -121,7 +121,7 @@ async fn main_result() -> Result<(), Error> {
       println!("launcho {}", env!("CARGO_PKG_VERSION"));
     }
     Action::PrintAuth => {
-      let mut auth_config = launcho::get_auth_config(GetAuthConfigMode::ServerFailIfNotExists)?;
+      let mut auth_config = launcho::get_auth_config(None, GetAuthConfigMode::ServerFailIfNotExists)?;
       auth_config.host = Some("change-me-to-point-to-the-server.example.com:12888".to_string());
       auth_config.private = None;
       println!("# Paste this into ~/.launcho/launcho-client-auth.yaml on the client machine");

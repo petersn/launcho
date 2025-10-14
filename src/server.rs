@@ -210,8 +210,10 @@ fn clear_launch_rate_limits() {
   map.retain(|k, _| !k.starts_with("launch:"));
 }
 
+pub const MAX_LOG_SPOOL_LENGTH: usize = 64 * 1024 * 1024;
+
 struct SpooledOutput {
-  buffer: Mutex<Vec<u8>>,
+  buffer: Mutex<VecDeque<u8>>,
 }
 
 impl SpooledOutput {
@@ -234,6 +236,7 @@ impl SpooledOutput {
           }
           let mut guard = this.buffer.lock().unwrap();
           guard.extend_from_slice(&buf[..n]);
+          guard.truncate_front(MAX_LOG_SPOOL_LENGTH);
           std::mem::drop(guard);
         }
       });
