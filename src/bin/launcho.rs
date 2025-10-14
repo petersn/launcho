@@ -274,7 +274,7 @@ async fn main_result() -> Result<(), Error> {
             println!("{:#?}", ipvs_state);
           }
           println!("\x1b[93m=== Processes:\x1b[0m");
-          println!("{}", status)
+          println!("{}", status.strip_suffix("\n").unwrap_or(&status));
         }
         _ => panic!("Unexpected response: {:?}", response),
       }
